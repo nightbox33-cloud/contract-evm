@@ -30,6 +30,28 @@ contract OperatorManagerImplA is IOperatorManagerImplA, OwnableUpgradeable, Oper
         futuresUploadBatchId += 1;
     }
 
+    /// @notice Function for perpetual futures trade upload
+    function futuresTradeUploadV3(PerpTypes.FuturesTradeUploadDataV3 calldata data) external override {
+        if (data.batchId != futuresUploadBatchId) revert BatchIdNotMatch(data.batchId, futuresUploadBatchId);
+        _innerPing();
+        _futuresTradeUploadV3Data(data);
+        // emit event
+        emit FuturesTradeUploadV3(data.batchId);
+        // next wanted futuresUploadBatchId
+        futuresUploadBatchId += 1;
+    }
+
+    /// @notice Function for perpetual futures trade upload V4 (V3 + `isInsuranceAccount` flag per trade)
+    function futuresTradeUploadV4(PerpTypes.FuturesTradeUploadDataV4 calldata data) external override {
+        if (data.batchId != futuresUploadBatchId) revert BatchIdNotMatch(data.batchId, futuresUploadBatchId);
+        _innerPing();
+        _futuresTradeUploadV4Data(data);
+        // emit event
+        emit FuturesTradeUploadV4(data.batchId);
+        // next wanted futuresUploadBatchId
+        futuresUploadBatchId += 1;
+    }
+
     /// @notice Function for perpetual futures price upload
     function perpPriceUpload(MarketTypes.UploadPerpPrice calldata data) external override {
         _innerPing();
@@ -76,6 +98,34 @@ contract OperatorManagerImplA is IOperatorManagerImplA, OwnableUpgradeable, Oper
         // We should change to the transient storage implementation to save gas
         // and increase the tps of trade upload
         // ledger.executeProcessValidatedFuturesBatch(trades);
+    }
+
+    function _futuresTradeUploadV3Data(PerpTypes.FuturesTradeUploadDataV3 calldata data) internal {
+        PerpTypes.FuturesTradeUploadV3[] calldata trades = data.trades;
+        if (trades.length != data.count) revert CountNotMatch(trades.length, data.count);
+
+        // check engine signature
+        bool succ = Signature.perpUploadEncodeHashVerify(data, enginePerpTradeUploadAddress);
+        if (!succ) revert SignatureNotMatch();
+
+        // process each validated perp trades
+        for (uint256 i = 0; i < data.count; i++) {
+            ledger.executeProcessValidatedFuturesV3(trades[i]);
+        }
+    }
+
+    function _futuresTradeUploadV4Data(PerpTypes.FuturesTradeUploadDataV4 calldata data) internal {
+        PerpTypes.FuturesTradeUploadV4[] calldata trades = data.trades;
+        if (trades.length != data.count) revert CountNotMatch(trades.length, data.count);
+
+        // check engine signature (covers every field of every trade, including isInsuranceAccount)
+        bool succ = Signature.perpUploadEncodeHashVerify(data, enginePerpTradeUploadAddress);
+        if (!succ) revert SignatureNotMatch();
+
+        // process each validated perp trades
+        for (uint256 i = 0; i < data.count; i++) {
+            ledger.executeProcessValidatedFuturesV4(trades[i]);
+        }
     }
 
     /// @notice Function to verify Engine signature for perpetual future price data, if validated then MarketManager contract will be called to execute the market process

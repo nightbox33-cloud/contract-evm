@@ -8,16 +8,7 @@ import "./interface/IVaultManager.sol";
 import "./interface/ILedgerCrossChainManager.sol";
 import "./interface/IMarketManager.sol";
 import "./interface/IFeeManager.sol";
-import "./library/Utils.sol";
-import "./library/Signature.sol";
-import "./library/typesHelper/AccountTypeHelper.sol";
-import "./library/typesHelper/AccountTypePositionHelper.sol";
-import "./library/typesHelper/SafeCastHelper.sol";
 import "./interface/ILedgerCrossChainManagerV2.sol";
-import "./interface/ILedgerImplA.sol";
-import "./interface/ILedgerImplB.sol";
-import "./interface/ILedgerImplC.sol";
-import "./interface/ILedgerImplD.sol";
 
 import "./oz5Revised/AccessControlRevised.sol";
 
@@ -27,10 +18,6 @@ import "./oz5Revised/AccessControlRevised.sol";
 /// and global state (e.g. futuresUploadBatchId)
 /// This contract should only have one in main-chain (e.g. OP orderly L2)
 contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlRevised {
-    using AccountTypeHelper for AccountTypes.Account;
-    using AccountTypePositionHelper for AccountTypes.PerpPosition;
-    using SafeCastHelper for *;
-
     // Using Storage as OZ 5.0 does
     struct LedgerStorage {
         // Because of EIP170 size limit, the implementation should be split to impl contracts
@@ -38,6 +25,7 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         address ledgerImplB;
         address ledgerImplC;
         address ledgerImplD;
+        address ledgerImplView;
     }
 
     // keccak256(abi.encode(uint256(keccak256("orderly.Ledger")) - 1)) & ~bytes32(uint256(0xff))
@@ -61,7 +49,7 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         _;
     }
 
-    /// @notice require operator
+    /// @notice require operatorManager
     modifier onlyOperatorManager() {
         if (msg.sender != operatorManagerAddress) revert OnlyOperatorCanCall();
         _;
@@ -115,6 +103,12 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
     function setLedgerImplD(address _ledgerImplD) external override onlyOwner nonZeroAddress(_ledgerImplD) {
         emit ChangeLedgerImplD(_getLedgerStorage().ledgerImplD, _ledgerImplD);
         _getLedgerStorage().ledgerImplD = _ledgerImplD;
+    }
+
+    /// @notice Set the address of ledgerImplView contract
+    function setLedgerImplView(address _ledgerImplView) external override onlyOwner nonZeroAddress(_ledgerImplView) {
+        emit ChangeLedgerImplView(_getLedgerStorage().ledgerImplView, _ledgerImplView);
+        _getLedgerStorage().ledgerImplView = _ledgerImplView;
     }
 
     /// @notice Set the address of operatorManager contract
@@ -196,7 +190,7 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
     /// @param _id accountId or spId
     /// @param _solanaPrimeWallet address of the prime wallet
     function setSolanaPrimeWallet(bytes32 _id, bytes32 _solanaPrimeWallet) external onlyOwner {
-        require(_solanaPrimeWallet != bytes32(0), "Zero Solana Prime Wallet");
+        if (_solanaPrimeWallet == bytes32(0)) revert AddressZero();
         idToSolanaPrimeWallet[_id] = _solanaPrimeWallet;
         emit SolanaPrimeWalletSet(_id, _solanaPrimeWallet);
     }
@@ -206,6 +200,19 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         emit VaultSet(vault, isValid);
     }
 
+    /// @notice Add or remove an account from the average entry price recomputation skip list.
+    /// @dev For accounts in this list, if the average entry price / opening cost
+    ///      recomputation during perp trade upload would produce an out-of-range
+    ///      value, the recomputation is skipped (position quantity and cost are
+    ///      still updated) and a `CalAverageEntryPriceSkipped` event is emitted,
+    ///      rather than reverting the upload. Owner-gated.
+    /// @param accountId the account to configure
+    /// @param allowed true to enable skipping for this account, false to use the standard behaviour
+    function setCalAvgSkipAccount(bytes32 accountId, bool allowed) external onlyOwner {
+        calAvgSkipList[accountId] = allowed;
+        emit CalAvgSkipAccountSet(accountId, allowed);
+    }
+
     /// @notice Get the amount of a token frozen balance for a given account and the corresponding withdrawNonce
     /// @param accountId accountId to query
     /// @param withdrawNonce withdrawNonce to query
@@ -213,122 +220,136 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
     /// @return uint128 frozen value
     function getFrozenWithdrawNonce(bytes32 accountId, uint64 withdrawNonce, bytes32 tokenHash)
         external
-        view
         override
         returns (uint128)
     {
-        return userLedger[accountId].getFrozenWithdrawNonceBalance(withdrawNonce, tokenHash);
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (uint128));
     }
 
-    /// @notice omni batch get
-    /// @param accountIds accountId list to query
-    /// @param tokens token list to query
-    /// @param symbols symbol list to query
-    /// @return accountSnapshots account snapshot list for the given tokens and symbols
     function batchGetUserLedger(bytes32[] calldata accountIds, bytes32[] memory tokens, bytes32[] memory symbols)
         public
-        view
         override
         returns (AccountTypes.AccountSnapshot[] memory accountSnapshots)
     {
-        uint256 accountIdLength = accountIds.length;
-        uint256 tokenLength = tokens.length;
-        uint256 symbolLength = symbols.length;
-        accountSnapshots = new AccountTypes.AccountSnapshot[](accountIdLength);
-        for (uint256 i = 0; i < accountIdLength; ++i) {
-            bytes32 accountId = accountIds[i];
-            AccountTypes.Account storage account = userLedger[accountId];
-            AccountTypes.AccountTokenBalances[] memory tokenInner = new AccountTypes.AccountTokenBalances[](tokenLength);
-            for (uint256 j = 0; j < tokenLength; ++j) {
-                bytes32 tokenHash = tokens[j];
-                tokenInner[j] = AccountTypes.AccountTokenBalances({
-                    tokenHash: tokenHash,
-                    balance: account.getBalance(tokenHash),
-                    frozenBalance: account.getFrozenTotalBalance(tokenHash)
-                });
-            }
-            AccountTypes.AccountPerpPositions[] memory symbolInner =
-                new AccountTypes.AccountPerpPositions[](symbolLength);
-            for (uint256 j = 0; j < symbolLength; ++j) {
-                bytes32 symbolHash = symbols[j];
-                AccountTypes.PerpPosition storage perpPosition = account.perpPositions[symbolHash];
-                symbolInner[j] = AccountTypes.AccountPerpPositions({
-                    symbolHash: symbolHash,
-                    positionQty: perpPosition.positionQty,
-                    costPosition: perpPosition.costPosition,
-                    lastSumUnitaryFundings: perpPosition.lastSumUnitaryFundings,
-                    lastExecutedPrice: perpPosition.lastExecutedPrice,
-                    lastSettledPrice: perpPosition.lastSettledPrice,
-                    averageEntryPrice: perpPosition.averageEntryPrice,
-                    openingCost: perpPosition.openingCost,
-                    lastAdlPrice: perpPosition.lastAdlPrice
-                });
-            }
-            accountSnapshots[i] = AccountTypes.AccountSnapshot({
-                accountId: accountId,
-                brokerHash: account.brokerHash,
-                userAddress: account.userAddress,
-                lastWithdrawNonce: account.lastWithdrawNonce,
-                lastPerpTradeId: account.lastPerpTradeId,
-                lastEngineEventId: account.lastEngineEventId,
-                lastDepositEventId: account.lastDepositEventId,
-                tokenBalances: tokenInner,
-                perpPositions: symbolInner,
-                lastDepositSrcChainId: account.lastDepositSrcChainId,
-                lastDepositSrcChainNonce: account.lastDepositSrcChainNonce
-            });
-        }
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (AccountTypes.AccountSnapshot[]));
     }
 
     function batchGetUserLedger(bytes32[] calldata accountIds)
         external
-        view
         returns (AccountTypes.AccountSnapshot[] memory)
     {
-        bytes32[] memory tokens = vaultManager.getAllAllowedToken();
-        bytes32[] memory symbols = vaultManager.getAllAllowedSymbol();
-        return batchGetUserLedger(accountIds, tokens, symbols);
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (AccountTypes.AccountSnapshot[]));
     }
 
-    function getUserTokenBalance(bytes32 accountId, bytes32 tokenHash) external view override returns (int128) {
-        return userLedger[accountId].getBalance(tokenHash);
+    function getUserTokenBalance(bytes32 accountId, bytes32 tokenHash) external override returns (int128) {
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (int128));
     }
 
-    function getUserEscrowBalance(bytes32 accountId, bytes32 tokenHash) external view override returns (uint128) {
+    function batchGetUserLedgerV3(bytes32[] calldata accountIds, bytes32[] memory tokens, bytes32[] memory symbols)
+        public
+        override
+        returns (AccountTypes.AccountSnapshotV3[] memory accountSnapshots)
+    {
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (AccountTypes.AccountSnapshotV3[]));
+    }
+
+    function batchGetUserLedgerV3(bytes32[] calldata accountIds)
+        public
+        override
+        returns (AccountTypes.AccountSnapshotV3[] memory accountSnapshots)
+    {   
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (AccountTypes.AccountSnapshotV3[]));
+    }
+
+    function batchGetUserBalance(bytes32[] calldata accountIds)
+        external
+        override
+        returns (AccountTypes.AccountBalanceSnapshot[] memory)
+    {
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (AccountTypes.AccountBalanceSnapshot[]));
+    }
+
+    function getUserEscrowBalance(bytes32 accountId, bytes32 tokenHash) external override returns (uint128) {
         return escrowBalances[accountId][tokenHash];
     }
 
-    function getUserTotalFrozenBalance(bytes32 accountId, bytes32 tokenHash) external view override returns (uint128) {
-        return userLedger[accountId].getFrozenTotalBalance(tokenHash);
+    function getUserTotalFrozenBalance(bytes32 accountId, bytes32 tokenHash) external  override returns (uint128) {
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (uint128));
     }
 
     function getBalanceTransferState(uint256 transferId)
         external
-        view
         override
         returns (EventTypes.InternalTransferTrack memory)
     {
-        return transfers[transferId];
+        bytes memory result = _delegatecall(
+            _getLedgerStorage().ledgerImplView
+        );
+        return abi.decode(result, (EventTypes.InternalTransferTrack));
     }
 
-    function getLedgerImpl() external view returns (address, address, address, address) {
+    function getLedgerImpl() external view returns (address, address, address, address, address) {
         LedgerStorage storage $ = _getLedgerStorage();
-        return ($.ledgerImplA, $.ledgerImplB, $.ledgerImplC, $.ledgerImplD);
+        return ($.ledgerImplA, $.ledgerImplB, $.ledgerImplC, $.ledgerImplD, $.ledgerImplView);
     }
 
     /// Interface implementation
 
     /// @notice The cross chain manager will call this function to notify the deposit event to the Ledger contract
-    /// @param data account deposit data
     function accountDeposit(AccountTypes.AccountDeposit calldata data) external override onlyCrossChainManager {
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.accountDeposit.selector, data), _getLedgerStorage().ledgerImplA
+            _getLedgerStorage().ledgerImplA
         );
     }
 
     function accountDepositSol(AccountTypes.AccountDepositSol calldata data) external override onlyCrossChainManagerV2 {
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplC.accountDepositSol.selector, data), _getLedgerStorage().ledgerImplC
+            _getLedgerStorage().ledgerImplC
+        );
+    }
+
+    function executeProcessValidatedFuturesV3(PerpTypes.FuturesTradeUploadV3 calldata trade)
+        external
+        override
+        onlyOperatorManager
+    {   
+        // _onlyOperatorManager();
+        _delegatecall(
+            _getLedgerStorage().ledgerImplD
+        );
+    }
+
+    function executeProcessValidatedFuturesV4(PerpTypes.FuturesTradeUploadV4 calldata trade)
+        external
+        override
+        onlyOperatorManager
+    {
+        _delegatecall(
+            _getLedgerStorage().ledgerImplD
         );
     }
 
@@ -337,8 +358,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeProcessValidatedFutures.selector, trade),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -347,9 +368,9 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         external
         override
         onlyOperatorManager
-    {
+    {   
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplB.executeProcessValidatedFuturesBatch.selector, trades),
             _getLedgerStorage().ledgerImplB
         );
     }
@@ -359,8 +380,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeWithdrawAction.selector, withdraw, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -370,15 +391,15 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplC.executeWithdrawSolAction.selector, withdraw, eventId),
             _getLedgerStorage().ledgerImplC
         );
     }
 
     function accountWithdrawFail(AccountTypes.AccountWithdraw memory withdraw) external override onlyOwner {
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.accountWithdrawFail.selector, withdraw), _getLedgerStorage().ledgerImplA
+           _getLedgerStorage().ledgerImplA
         );
     }
 
@@ -388,7 +409,6 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         onlyCrossChainManager
     {
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.accountWithDrawFinish.selector, withdraw),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -397,9 +417,9 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         external
         override
         onlyOperatorManager
-    {
+    {   
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeSettlement.selector, settlement, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -409,8 +429,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeLiquidation.selector, liquidation, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -420,21 +440,23 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeLiquidationV2.selector, liquidation, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
 
-    function executeAdl(EventTypes.Adl calldata adl, uint64 eventId) external override onlyOperatorManager {
+    function executeAdl(EventTypes.Adl calldata adl, uint64 eventId) external override onlyOperatorManager { 
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeAdl.selector, adl, eventId), _getLedgerStorage().ledgerImplA
+            _getLedgerStorage().ledgerImplA
         );
     }
 
-    function executeAdlV2(EventTypes.AdlV2 calldata adl, uint64 eventId) external override onlyOperatorManager {
+    function executeAdlV2(EventTypes.AdlV2 calldata adl, uint64 eventId) external override onlyOperatorManager { 
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeAdlV2.selector, adl, eventId), _getLedgerStorage().ledgerImplA
+            _getLedgerStorage().ledgerImplA
         );
     }
 
@@ -443,8 +465,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeFeeDistribution.selector, feeDistribution, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -454,8 +476,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeDelegateSigner.selector, delegateSigner, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -465,8 +487,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplA.executeDelegateWithdrawAction.selector, delegateWithdraw, eventId),
             _getLedgerStorage().ledgerImplA
         );
     }
@@ -476,6 +498,7 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();        
         (uint32 dstDomain, address dstVaultAddress) = vaultManager.executeRebalanceBurn(data);
         // send cc message with:
         // rebalanceId, amount, tokenHash, burnChainId, mintChainId | dstDomain, dstVaultAddress
@@ -506,6 +529,7 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         vaultManager.executeRebalanceMint(data);
         // send cc Message with:
         // rebalanceId, amount, tokenHash, burnChainId, mintChainId | messageBytes, messageSignature
@@ -536,8 +560,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplD.executeWithdraw2Contract.selector, data, eventId),
             _getLedgerStorage().ledgerImplD
         );
     }
@@ -547,8 +571,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplC.executeBalanceTransfer.selector, balanceTransfer, eventId),
             _getLedgerStorage().ledgerImplC
         );
     }
@@ -558,8 +582,8 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplD.executeSwapResultUpload.selector, swapResultUpload, eventId),
             _getLedgerStorage().ledgerImplD
         );
     }
@@ -569,8 +593,52 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
         override
         onlyOperatorManager
     {
+        // _onlyOperatorManager();
         _delegatecall(
-            abi.encodeWithSelector(ILedgerImplD.executeWithdraw2ContractV2.selector, withdraw2ContractV2, eventId),
+            _getLedgerStorage().ledgerImplD
+        );
+    }
+
+    function executeSettlementV3(EventTypes.SettlementV3 calldata isoSettlement, uint64 eventId)
+        external
+        override
+        onlyOperatorManager
+    {
+        // _onlyOperatorManager();
+        _delegatecall(
+            _getLedgerStorage().ledgerImplD
+        );
+    }
+
+    function executeAdlV3(EventTypes.AdlV3 calldata isoAdl, uint64 eventId)
+        external
+        override
+        onlyOperatorManager
+    {
+        // _onlyOperatorManager();
+        _delegatecall(
+            _getLedgerStorage().ledgerImplD
+        );
+    }
+
+    function executeLiquidationV3(EventTypes.LiquidationV3 calldata liquidationV3, uint64 eventId)
+        external
+        override
+        onlyOperatorManager
+    {
+        // _onlyOperatorManager();
+        _delegatecall(
+            _getLedgerStorage().ledgerImplD
+        );
+    }
+
+    function executeMarginTransferV3(EventTypes.MarginTransferV3 calldata isoMarginTransfer, uint64 eventId)
+        external
+        override
+        onlyOperatorManager
+    {
+        // _onlyOperatorManager();
+        _delegatecall(
             _getLedgerStorage().ledgerImplD
         );
     }
@@ -626,8 +694,9 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
     }
 
     // inner function for delegatecall
-    function _delegatecall(bytes memory data, address impl) private {
-        (bool success, bytes memory returnData) = impl.delegatecall(data);
+    // @Notive: relay the msg.data to impl contract, which is already encoded as per the function signature
+    function _delegatecall(address impl) private returns (bytes memory) {
+        (bool success, bytes memory returnData) = impl.delegatecall(msg.data);
         if (!success) {
             if (returnData.length > 0) {
                 assembly {
@@ -637,5 +706,6 @@ contract Ledger is ILedger, OwnableUpgradeable, LedgerDataLayout, AccessControlR
                 revert DelegatecallFail();
             }
         }
+        return returnData;
     }
 }

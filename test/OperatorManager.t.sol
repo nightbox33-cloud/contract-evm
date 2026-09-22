@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import "forge-std/Test.sol";
 import "openzeppelin-contracts/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import "openzeppelin-contracts/contracts/proxy/transparent/ProxyAdmin.sol";
+import "openzeppelin-contracts/contracts/utils/cryptography/ECDSA.sol";
 import "../src/OperatorManager.sol";
 import "../src/Ledger.sol";
 import "../src/VaultManager.sol";
@@ -88,5 +89,102 @@ contract OperatorManagerTest is Test {
         assertTrue(operatorManager.bizTypeToSelectors(14) == 0x9df6d026);   // executeWithdraw2ContractV2
 
     }
+
+    // ---------- setAllowedSymbol tests ----------
+    using ECDSA for bytes32;
+
+    bytes32 constant SYMBOL_MANAGER_ROLE = keccak256("ORDERLY_MANAGER_SYMBOL_MANAGER_ROLE");
+    uint256 constant CEFI_PRIVATE_KEY =
+        0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9d6f235a491091696;
+
+    /// @notice Success path: operator calls setAllowedSymbol with valid CEFI signature; passes verification and updates VaultManager.
+    function test_setAllowedSymbol_success() public {
+        vm.chainId(291);
+
+        operatorManager.setVaultManager(address(vaultManager));
+        // Set permissionlessListingSignerAddress
+        address cefiSigner = vm.addr(CEFI_PRIVATE_KEY);
+        operatorManager.setPermissionlessListingSignerAddress(cefiSigner);
+
+        // VaultManager.setAllowedSymbolByOperator requires SYMBOL_MANAGER_ROLE; owner grants it to OperatorManager
+        VaultManager(address(vaultManager)).grantRole(SYMBOL_MANAGER_ROLE, address(operatorManager));
+
+        // Business params
+        bytes32 symbolHash = 0xe3ed72b93c91c8c78347689fd6f9b0d13a00f484b9d3cdc8413bcf4a53c90e89;
+        bool allowed = true;
+        uint64 sequenceId = 123456;
+
+        // Set permissionlessListingSequenceId to 123455 (expected next value is +1).
+        bytes32 signerAndSeqSlot = vm.load(address(operatorManager), bytes32(uint256(0x70)));
         
+        // << 160 places the 64 bits after the 160-bit (address) field; mask clears that 64-bit slot then we set it to 123455
+        uint256 cleared = uint256(signerAndSeqSlot) & ~(uint256(type(uint64).max) << 160);
+        vm.store(
+            address(operatorManager),
+            bytes32(uint256(0x70)),
+            bytes32(cleared | (uint256(123455) << 160))
+        );
+        assertEq(operatorManager.permissionlessListingSequenceId(), 123455, "sequenceId should be preset");
+
+        bytes memory cefiSignature;
+        {
+            bytes32 messageHash = keccak256(abi.encode(symbolHash, allowed, sequenceId, block.chainid));
+            bytes32 ethSignedHash = messageHash.toEthSignedMessageHash();
+            (uint8 v, bytes32 r, bytes32 s) = vm.sign(CEFI_PRIVATE_KEY, ethSignedHash);
+            cefiSignature = abi.encodePacked(r, s, v);
+        }
+
+        vm.prank(operatorAddress);
+        operatorManager.setAllowedSymbol(symbolHash, allowed, sequenceId, block.chainid, cefiSignature);
+
+        assertTrue(vaultManager.getAllowedSymbol(symbolHash), "symbol should be allowed");
+        assertEq(operatorManager.permissionlessListingSequenceId(), sequenceId, "sequenceId should be updated");
+    }
+
+    /// @notice Call should revert with VaultManagerNotSet when VaultManager is not set.
+    function test_setAllowedSymbol_revertWhenVaultManagerNotSet() public {
+        address cefiSigner = vm.addr(CEFI_PRIVATE_KEY);
+        operatorManager.setPermissionlessListingSignerAddress(cefiSigner);
+        bytes32 symbolHash = keccak256(bytes("PERP_BTC_USDC"));
+        bytes memory cefiSignature = abi.encodePacked(bytes32(0), bytes32(0), uint8(0));
+
+        vm.prank(operatorAddress);
+        vm.expectRevert(IError.VaultManagerNotSet.selector);
+        operatorManager.setAllowedSymbol(symbolHash, true, 1, block.chainid, cefiSignature);
+    }
+
+    /// @notice Call should revert with PermissionlessListingSignerNotSet when CEFI signer address is not set.
+    function test_setAllowedSymbol_revertWhenPermissionlessListingSignerNotSet() public {
+        operatorManager.setVaultManager(address(vaultManager));
+        bytes32 symbolHash = keccak256(bytes("PERP_BTC_USDC"));
+        bytes memory cefiSignature = abi.encodePacked(bytes32(0), bytes32(0), uint8(0));
+
+        vm.prank(operatorAddress);
+        vm.expectRevert(IError.PermissionlessListingSignerNotSet.selector);
+        operatorManager.setAllowedSymbol(symbolHash, true, 1, block.chainid, cefiSignature);
+    }
+
+    /// @notice Call should revert with InvalidSequenceId when sequenceId != permissionlessListingSequenceId + 1.
+    function test_setAllowedSymbol_revertWhenInvalidSequenceId() public {
+        operatorManager.setVaultManager(address(vaultManager));
+        address cefiSigner = vm.addr(CEFI_PRIVATE_KEY);
+        operatorManager.setPermissionlessListingSignerAddress(cefiSigner);
+        VaultManager(address(vaultManager)).grantRole(SYMBOL_MANAGER_ROLE, address(operatorManager));
+
+        bytes32 symbolHash = keccak256(bytes("PERP_BTC_USDC"));
+        uint64 wrongSequenceId = 2; // Current is 0, expected is 1
+
+        bytes32 messageHash = keccak256(abi.encode(symbolHash, true, wrongSequenceId, block.chainid));
+        bytes32 ethSignedHash = messageHash.toEthSignedMessageHash();
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(CEFI_PRIVATE_KEY, ethSignedHash);
+        bytes memory cefiSignature = abi.encodePacked(r, s, v);
+
+        // Operator calls setAllowedSymbol
+        vm.prank(operatorAddress);
+        vm.expectRevert(
+            abi.encodeWithSelector(IError.InvalidSequenceId.selector, uint256(wrongSequenceId), uint256(1))
+        );
+        operatorManager.setAllowedSymbol(symbolHash, true, wrongSequenceId, block.chainid, cefiSignature);
+    }
+
 }

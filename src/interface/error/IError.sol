@@ -44,12 +44,19 @@ interface IError {
     error NotImplemented();
     error UnsupportChainType();
     error InvalidVault();
+    error IsoAdlMarginToCrossAmountInvalid(int128 isoMarginToCross);
+    error MarginTransferV3AmountInvalid(int128 marginFromCross);
+    error InvalidMarginMode(uint8 marginMode);
 
     // OperatorManager Error
     error InvalidBizType(uint8 bizType);
     error BatchIdNotMatch(uint64 batchId, uint64 futuresUploadBatchId);
     error CountNotMatch(uint256 length, uint256 count);
     error SignatureNotMatch();
+    error InvalidSequenceId(uint256 given, uint256 expected);
+    error VaultManagerNotSet();
+    error PermissionlessListingSignerNotSet();
+    error InvalidChainId(uint256 given, uint256 expected);
 
     // VaultManager Error
     error EnumerableSetError();

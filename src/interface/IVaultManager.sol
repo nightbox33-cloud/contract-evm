@@ -62,6 +62,10 @@ interface IVaultManager is IError, ILedgerComponent {
 
     // allow symbol
     function setAllowedSymbol(bytes32 _symbolHash, bool _allowed) external;
+    
+    // @Ray add function for permissionless listing: set allowed symbol by OperatorManager
+    function setAllowedSymbolByOperator(bytes32 symbolHash, bool allowed) external;
+
     function getAllowedSymbol(bytes32 _symbolHash) external view returns (bool);
 
     // get allowed set

@@ -64,6 +64,17 @@ interface ILedgerEvent {
         uint64 lastEngineEventId
     );
 
+    event SettlementResultV3(
+        uint64 indexed eventId,
+        bytes32 indexed accountId,
+        int128 settledAmount,
+        bytes32 settledAssetHash,
+        bytes32 insuranceAccountId,
+        uint128 insuranceTransferAmount,
+        uint64 settlementExecutionsCount,
+        uint64 lastEngineEventId
+    );
+
     event AdlResult(
         uint64 indexed eventId,
         bytes32 indexed accountId,
@@ -87,6 +98,21 @@ interface ILedgerEvent {
         uint64 lastEngineEventId
     );
 
+    event AdlResultV3(
+        uint64 indexed eventId,
+        bytes32 indexed accountId,
+        bool isInsuranceAccount,
+        bytes32 symbolHash,
+        int128 positionQtyTransfer,
+        int128 costPositionTransfer,
+        uint128 adlPrice,
+        int128 sumUnitaryFundings,
+        uint8 marginMode,
+        bytes32 isoMarginAssetHash,
+        int128 isoMargin,
+        uint64 lastEngineEventId
+    );
+
     event LiquidationResult(
         uint64 indexed eventId,
         bytes32 indexed liquidatedAccountId,
@@ -101,6 +127,15 @@ interface ILedgerEvent {
         bytes32 indexed accountId,
         bytes32 liquidatedAssetHash,
         int128 insuranceTransferAmount,
+        uint64 lastEngineEventId
+    );
+
+    event LiquidationResultV3(
+        uint64 indexed eventId,
+        bytes32 indexed accountId,
+        bytes32 liquidatedAssetHash,
+        int128 insuranceTransferAmount,
+        bool isInsuranceAccount,
         uint64 lastEngineEventId
     );
 
@@ -119,9 +154,61 @@ interface ILedgerEvent {
         bool side
     );
 
-    event SettlementExecution(
-        bytes32 indexed symbolHash, uint128 markPrice, int128 sumUnitaryFundings, int128 settledAmount
+    // remove timestamp to avoid Stack too deep error
+    event ProcessValidatedFuturesV3(
+        bytes32 indexed accountId,
+        bytes32 indexed symbolHash,
+        bytes32 feeAssetHash,
+        int128 tradeQty,
+        int128 notional,
+        uint128 executedPrice,
+        int128 fee,
+        int128 sumUnitaryFundings,
+        uint64 tradeId,
+        uint64 matchId,
+        // uint64 timestamp,
+        bool side,
+        uint8 marginMode,
+        bytes32 isoMarginAssetHash,
+        int128 isoMargin
     );
+
+    // V4: same as V3, with `isInsuranceAccount` appended
+    event ProcessValidatedFuturesV4(
+        bytes32 indexed accountId,
+        bytes32 indexed symbolHash,
+        bytes32 feeAssetHash,
+        int128 tradeQty,
+        int128 notional,
+        uint128 executedPrice,
+        int128 fee,
+        int128 sumUnitaryFundings,
+        uint64 tradeId,
+        uint64 matchId,
+        // uint64 timestamp,
+        bool side,
+        uint8 marginMode,
+        bytes32 isoMarginAssetHash,
+        int128 isoMargin,
+        bool isInsuranceAccount
+    );
+
+    event SettlementExecution(
+        bytes32 indexed symbolHash,
+        uint128 markPrice,
+        int128 sumUnitaryFundings,
+        int128 settledAmount
+    );
+
+    event SettlementExecutionV3(
+        bytes32 indexed symbolHash,
+        uint128 markPrice,
+        int128 sumUnitaryFundings,
+        int128 settledAmount,
+        uint8 marginMode,
+        bytes32 isoMarginAssetHash
+    );
+
     event LiquidationTransfer(
         uint64 indexed liquidationTransferId,
         bytes32 indexed liquidatorAccountId,
@@ -145,6 +232,19 @@ interface ILedgerEvent {
         int128 sumUnitaryFundings
     );
 
+    event LiquidationTransferV3(
+        bytes32 indexed accountId,
+        bytes32 indexed symbolHash,
+        int128 positionQtyTransfer,
+        int128 costPositionTransfer,
+        int128 fee,
+        uint128 markPrice,
+        int128 sumUnitaryFundings,
+        uint8 marginMode,
+        bytes32 isoMarginAssetHash,
+        int128 marginToCross  
+    );
+
     event FeeDistribution(
         uint64 indexed eventId,
         bytes32 indexed fromAccountId,
@@ -162,6 +262,16 @@ interface ILedgerEvent {
         address delegateSigner
     );
 
+    event MarginTransferV3(
+        uint64 indexed eventId,
+        bytes32 indexed accountId,
+        int128 transferAmount,
+        bytes32 transferAssetHash,
+        bytes32 isoSymbolHash,
+        uint64 timestamp,
+        uint64 lastEngineEventId
+    );
+
     event ChangeOperatorManager(address oldAddress, address newAddress);
     event ChangeCrossChainManager(address oldAddress, address newAddress);
     event ChangeCrossChainManagerV2(address oldAddress, address newAddress);
@@ -172,6 +282,7 @@ interface ILedgerEvent {
     event ChangeLedgerImplB(address oldAddress, address newAddress);
     event ChangeLedgerImplC(address oldAddress, address newAddress);
     event ChangeLedgerImplD(address oldAddress, address newAddress);
+    event ChangeLedgerImplView(address oldAddress, address newAddress);
 
     // for Solana
     event AccountRegister(bytes32 indexed accountId, bytes32 indexed brokerId, bytes32 indexed pubkey);
@@ -399,4 +510,27 @@ interface ILedgerEvent {
         bytes32 indexed brokerHash, 
         bool allowed
     );
+
+    /// @notice Emitted when the average entry price / opening cost recomputation
+    ///         was skipped for an account in the skip list because the result
+    ///         would be out of range. The trade is still applied to
+    ///         positionQty/costPosition; only avg/openingCost are left unchanged.
+    /// @param accountId the affected account
+    /// @param symbolHash the affected symbol
+    /// @param tradeId the trade id that triggered the skip
+    /// @param positionQty position quantity before applying this trade
+    /// @param tradeQty the trade quantity being applied
+    /// @param openingCost the (unchanged) openingCost left on the position
+    event CalAverageEntryPriceSkipped(
+        bytes32 indexed accountId,
+        bytes32 indexed symbolHash,
+        uint64 tradeId,
+        int128 positionQty,
+        int128 tradeQty,
+        int128 openingCost
+    );
+
+    /// @notice Emitted when an account is added to / removed from the
+    ///         average entry price recomputation skip list.
+    event CalAvgSkipAccountSet(bytes32 indexed accountId, bool allowed);
 }

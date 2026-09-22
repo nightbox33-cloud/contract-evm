@@ -48,10 +48,11 @@ contract VaultManagerTest is Test {
         vm.stopPrank();
     }
 
-    function testFail_sub_overflow() public {
+    function test_RevertWhen_subBalanceExceedsBalance_subBalance() public {
         vm.startPrank(address(ledger));
         vaultManager.addBalance(TOKEN_HASH, CHAIN_ID, 100);
         assertEq(vaultManager.getBalance(TOKEN_HASH, CHAIN_ID), 100);
+        vm.expectRevert(stdError.arithmeticError);
         vaultManager.subBalance(TOKEN_HASH, CHAIN_ID, 150);
         vm.stopPrank();
     }
@@ -88,20 +89,22 @@ contract VaultManagerTest is Test {
         vm.stopPrank();
     }
 
-    function testFail_frozen_overflow_1() public {
+    function test_RevertWhen_frozenExceedsBalance_frozenBalance_1() public {
         vm.startPrank(address(ledger));
         vaultManager.addBalance(TOKEN_HASH, CHAIN_ID, 100);
         assertEq(vaultManager.getBalance(TOKEN_HASH, CHAIN_ID), 100);
+        vm.expectRevert(stdError.arithmeticError);
         vaultManager.frozenBalance(TOKEN_HASH, CHAIN_ID, 150);
         vm.stopPrank();
     }
 
-    function testFail_frozen_overflow_2() public {
+    function test_RevertWhen_frozenExceedsBalance_frozenBalance_2() public {
         vm.startPrank(address(ledger));
         vaultManager.addBalance(TOKEN_HASH, CHAIN_ID, 200);
         assertEq(vaultManager.getBalance(TOKEN_HASH, CHAIN_ID), 200);
         vaultManager.subBalance(TOKEN_HASH, CHAIN_ID, 100);
         assertEq(vaultManager.getBalance(TOKEN_HASH, CHAIN_ID), 100);
+        vm.expectRevert(stdError.arithmeticError);
         vaultManager.frozenBalance(TOKEN_HASH, CHAIN_ID, 150);
         vm.stopPrank();
     }

@@ -4,6 +4,8 @@ pragma solidity ^0.8.18;
 import "openzeppelin-contracts-upgradeable/contracts/access/OwnableUpgradeable.sol";
 import "../interface/ILedger.sol";
 import "../interface/IMarketManager.sol";
+import "../interface/IVaultManager.sol";
+
 
 /// @title OperatorManager contract data layout
 /// @author Orderly_Rubick
@@ -34,7 +36,16 @@ contract OperatorManagerDataLayout {
     address public operatorManagerZipAddress;
 
     mapping(uint8 => bytes4) public bizTypeToSelectors;
+    
+    // @Ray: add permissionless listing related data
+    // The signer address of permissionless listing (CEFI setAllowedSymbol signer)
+    address public permissionlessListingSignerAddress;
+    uint64 public permissionlessListingSequenceId;
+
+    // VaultManager for permissionless listing (setAllowedSymbolByOperator)
+    IVaultManager public vaultManager;
 
     // The storage gap to prevent overwriting by proxy
-    uint256[39] private __gap;
+    // __gap = 50 - 13 = 37
+    uint256[37] private __gap;
 }

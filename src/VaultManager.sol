@@ -45,7 +45,6 @@ contract VaultManager is IVaultManager, LedgerComponent, AccessControlRevised {
     address private protocalVaultAddress;
 
     /* ================ Role ================ */
-
     bytes32 public constant SYMBOL_MANAGER_ROLE = keccak256("ORDERLY_MANAGER_SYMBOL_MANAGER_ROLE");
 
     bytes32 public constant BROKER_MANAGER_ROLE = keccak256("ORDERLY_MANAGER_BROKER_MANAGER_ROLE");
@@ -178,6 +177,22 @@ contract VaultManager is IVaultManager, LedgerComponent, AccessControlRevised {
         }
         if (!succ) revert EnumerableSetError();
         emit SetAllowedSymbol(_symbolHash, _allowed);
+    }
+
+    /// @notice Permissionless listing: set allowed symbol by OperatorManager (called after CEFI signature + sequenceId check).
+    function setAllowedSymbolByOperator(bytes32 symbolHash, bool allowed)
+        external
+        override
+        onlyOwnerOrRole(SYMBOL_MANAGER_ROLE)
+    {
+        bool succ = false;
+        if (allowed) {
+            succ = allowedSymbolSet.add(symbolHash);
+        } else {
+            succ = allowedSymbolSet.remove(symbolHash);
+        }
+        if (!succ) revert EnumerableSetError();
+        emit SetAllowedSymbol(symbolHash, allowed);
     }
 
     /// @notice Get the status for a symbol given the symbolHash

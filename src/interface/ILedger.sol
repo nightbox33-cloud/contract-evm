@@ -23,6 +23,8 @@ interface ILedger is IError, ILedgerEvent {
 
     // Functions called by operator manager to executre actions
     function executeProcessValidatedFutures(PerpTypes.FuturesTradeUpload calldata trade) external;
+    function executeProcessValidatedFuturesV3(PerpTypes.FuturesTradeUploadV3 calldata trade) external;
+    function executeProcessValidatedFuturesV4(PerpTypes.FuturesTradeUploadV4 calldata trade) external;
     function executeProcessValidatedFuturesBatch(PerpTypes.FuturesTradeUpload[] calldata trades) external;
     function executeWithdrawAction(EventTypes.WithdrawData calldata withdraw, uint64 eventId) external;
     function executeWithdrawSolAction(EventTypes.WithdrawDataSol calldata withdraw, uint64 eventId) external;
@@ -42,27 +44,36 @@ interface ILedger is IError, ILedgerEvent {
     function executeBalanceTransfer(EventTypes.BalanceTransfer calldata balanceTransfer, uint64 eventId) external;
     function executeSwapResultUpload(EventTypes.SwapResult calldata swapResultUpload, uint64 eventId) external;
     function executeWithdraw2ContractV2(EventTypes.Withdraw2ContractV2 calldata data, uint64 eventId) external;
+    function executeSettlementV3(EventTypes.SettlementV3 calldata isoSettlement, uint64 eventId) external;
+    function executeAdlV3(EventTypes.AdlV3 calldata isoAdl, uint64 eventId) external;
+    function executeLiquidationV3(EventTypes.LiquidationV3 calldata isoLiquidation, uint64 eventId) external;
+    function executeMarginTransferV3(EventTypes.MarginTransferV3 calldata isoMarginTransfer, uint64 eventId) external;
 
-    // view call
+    // view call (implemented via delegatecall to LedgerImplView)
     function getFrozenWithdrawNonce(bytes32 accountId, uint64 withdrawNonce, bytes32 tokenHash)
         external
-        view
         returns (uint128);
     // omni view call
     function batchGetUserLedger(bytes32[] calldata accountIds, bytes32[] memory tokens, bytes32[] memory symbols)
         external
-        view
         returns (AccountTypes.AccountSnapshot[] memory);
     function batchGetUserLedger(bytes32[] calldata accountIds)
         external
-        view
         returns (AccountTypes.AccountSnapshot[] memory);
-    function getUserTokenBalance(bytes32 accountId, bytes32 tokenHash) external view returns (int128);
-    function getUserEscrowBalance(bytes32 accountId, bytes32 tokenHash) external view returns (uint128);
-    function getUserTotalFrozenBalance(bytes32 accountId, bytes32 tokenHash) external view returns (uint128);
+    function batchGetUserLedgerV3(bytes32[] calldata accountIds, bytes32[] memory tokens, bytes32[] memory symbols)
+        external
+        returns (AccountTypes.AccountSnapshotV3[] memory);
+    function batchGetUserLedgerV3(bytes32[] calldata accountIds)
+        external
+        returns (AccountTypes.AccountSnapshotV3[] memory accountSnapshots);
+    function getUserTokenBalance(bytes32 accountId, bytes32 tokenHash) external returns (int128);
+    function batchGetUserBalance(bytes32[] calldata accountIds)
+        external
+        returns (AccountTypes.AccountBalanceSnapshot[] memory);
+    function getUserEscrowBalance(bytes32 accountId, bytes32 tokenHash) external returns (uint128);
+    function getUserTotalFrozenBalance(bytes32 accountId, bytes32 tokenHash) external returns (uint128);
     function getBalanceTransferState(uint256 transferId)
         external
-        view
         returns (EventTypes.InternalTransferTrack memory);
     
 
@@ -77,6 +88,7 @@ interface ILedger is IError, ILedgerEvent {
     function setLedgerImplB(address _ledgerImplB) external;
     function setLedgerImplC(address _ledgerImplC) external;
     function setLedgerImplD(address _ledgerImplD) external;
+    function setLedgerImplView(address _ledgerImplView) external;
     
     /// @notice Initiates cross-chain broker status modification to multiple vault chains
     /// @dev Only callable by owner, triggers cross-contract calls to VaultManager and LedgerCrossChainManager

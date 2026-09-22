@@ -11,6 +11,10 @@ import "./IOperatorManagerEvent.sol";
 interface IOperatorManagerImplA is IError, IOperatorManagerEvent {
     // operator call futures trade upload
     function futuresTradeUpload(PerpTypes.FuturesTradeUploadData calldata data) external;
+    // operator call iso futures trade upload
+    function futuresTradeUploadV3(PerpTypes.FuturesTradeUploadDataV3 calldata data) external;
+    // operator call futures trade upload V4 (V3 + isInsuranceAccount flag per trade)
+    function futuresTradeUploadV4(PerpTypes.FuturesTradeUploadDataV4 calldata data) external;
     // operator call perp market info
     function perpPriceUpload(MarketTypes.UploadPerpPrice calldata data) external;
     function sumUnitaryFundingsUpload(MarketTypes.UploadSumUnitaryFundings calldata data) external;

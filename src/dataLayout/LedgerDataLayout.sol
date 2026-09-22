@@ -48,6 +48,14 @@ contract LedgerDataLayout {
     // Id(accountId or spId) => Ceffu Prime Wallet on Solana
     mapping(bytes32 => bytes32) public idToSolanaPrimeWallet;
 
-    // The storage gap to prevent overwriting by proxy
-    uint256[37] private __gap;
+    // accountId => whether the average entry price / opening cost recomputation
+    // may be skipped for this account when the result would be out of range.
+    // When skipped, the position quantity and cost are still updated and an event
+    // is emitted. Accounts not in this list follow the standard behaviour.
+    mapping(bytes32 => bool) public calAvgSkipList;
+
+    // The storage gap to prevent overwriting by proxy.
+    // Reduced from 37 to 36 to account for `calAvgSkipList` above, keeping the
+    // overall storage layout aligned (1 mapping = 1 slot).
+    uint256[36] private __gap;
 }

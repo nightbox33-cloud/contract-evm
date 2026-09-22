@@ -13,11 +13,45 @@ fuzz_runs = 100_000
 verbosity = 4
 
 [rpc_endpoints]
-mainnet = "${RPC_URL_MAINNET}"
-goerli = "${RPC_URL_GOERLI}"
-hyperspace = "${RPC_URL_HYPERSPACE}"
-sepolia = "${RPC_URL_SEPOLIA}"
-fuji = "${RPC_URL_FUJI}"
+# Orderly settlement chain
+orderly = "${RPC_URL_ORDERLY}"
+orderly-testnet = "${RPC_URL_ORDERLY_TESTNET}"
+# Mainnet
+arbitrum = "${RPC_URL_ARBITRUM}"
+base = "${RPC_URL_BASE}"
+optimism = "${RPC_URL_OPTIMISM}"
+polygon = "${RPC_URL_POLYGON}"
+mantle = "${RPC_URL_MANTLE}"
+avalanche = "${RPC_URL_AVALANCHE}"
+sei = "${RPC_URL_SEI}"
+sonic = "${RPC_URL_SONIC}"
+berachain = "${RPC_URL_BERACHAIN}"
+morph = "${RPC_URL_MORPH}"
+story = "${RPC_URL_STORY}"
+mode = "${RPC_URL_MODE}"
+plume = "${RPC_URL_PLUME}"
+bsc = "${RPC_URL_BSC}"
+ethereum = "${RPC_URL_ETHEREUM}"
+abstract = "${RPC_URL_ABSTRACT}"
+monad = "${RPC_URL_MONAD}"
+# Testnet
+arbitrum-testnet = "${RPC_URL_ARBITRUM_TESTNET}"
+base-testnet = "${RPC_URL_BASE_TESTNET}"
+optimism-testnet = "${RPC_URL_OPTIMISM_TESTNET}"
+polygon-testnet = "${RPC_URL_POLYGON_TESTNET}"
+mantle-testnet = "${RPC_URL_MANTLE_TESTNET}"
+avalanche-testnet = "${RPC_URL_AVALANCHE_TESTNET}"
+sei-testnet = "${RPC_URL_SEI_TESTNET}"
+sonic-testnet = "${RPC_URL_SONIC_TESTNET}"
+berachain-testnet = "${RPC_URL_BERACHAIN_TESTNET}"
+morph-testnet = "${RPC_URL_MORPH_TESTNET}"
+story-testnet = "${RPC_URL_STORY_TESTNET}"
+mode-testnet = "${RPC_URL_MODE_TESTNET}"
+plume-testnet = "${RPC_URL_PLUME_TESTNET}"
+bsc-testnet = "${RPC_URL_BSC_TESTNET}"
+ethereum-testnet = "${RPC_URL_ETHEREUM_TESTNET}"
+abstract-testnet = "${RPC_URL_ABSTRACT_TESTNET}"
+monad-testnet = "${RPC_URL_MONAD_TESTNET}"
 
 # [etherscan]
 # mainnet = { key = "${ETHERSCAN_KEY}" }

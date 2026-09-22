@@ -144,6 +144,25 @@ library Signature {
         return verify(h, data.r, data.s, data.v, signer);
     }
 
+    function perpUploadEncodeHashVerify(PerpTypes.FuturesTradeUploadDataV3 memory data, address signer)
+        internal
+        pure
+        returns (bool)
+    {
+        bytes memory encoded = abi.encode(data.batchId, data.count, data.trades);
+        bytes32 h = ECDSA.toEthSignedMessageHash(keccak256(encoded));
+        return verify(h, data.r, data.s, data.v, signer);
+    }
+    function perpUploadEncodeHashVerify(PerpTypes.FuturesTradeUploadDataV4 memory data, address signer)
+        internal
+        pure
+        returns (bool)
+    {
+        bytes memory encoded = abi.encode(data.batchId, data.count, data.trades);
+        bytes32 h = ECDSA.toEthSignedMessageHash(keccak256(encoded));
+        return verify(h, data.r, data.s, data.v, signer);
+    }
+
     struct WithdrawDataSignature {
         uint64 eventId; // flat map to this
         string brokerId;
@@ -275,7 +294,11 @@ library Signature {
         Withdraw2Contract,          // 11
         BalanceTransfer,            // 12
         SwapResult,                 // 13
-        Withdraw2ContractV2         // 14
+        Withdraw2ContractV2,        // 14
+        SettlementV3,              // 15
+        AdlV3,                     // 16
+        LiquidationV3,             // 17
+        MarginTransferV3           // 18
     }
 
     /// @dev Signature structure for balance transfer events
@@ -320,6 +343,51 @@ library Signature {
         uint256 clientId;
     }
 
+     struct SettlementV3Signature {
+        uint64 eventId; // flat map to this
+        bytes32 accountId;
+        int128 settledAmount;
+        bytes32 settledAssetHash;
+        bytes32 insuranceAccountId;
+        uint128 insuranceTransferAmount;
+        EventTypes.SettlementExecutionV3[] isoSettlementExecutions;
+        uint64 timestamp;
+    }
+
+    struct AdlV3Signature {
+        uint64 eventId; // flat map to this
+        bytes32 accountId;
+        bytes32 symbolHash;
+        int128 positionQtyTransfer;
+        int128 costPositionTransfer;
+        uint128 adlPrice;
+        int128 sumUnitaryFundings;
+        uint64 timestamp;
+        bool isInsuranceAccount;
+        uint8 marginMode;
+        bytes32 isoMarginAssetHash;
+        int128 isoMargin;
+    }
+
+    struct LiquidationV3Signature {
+        uint64 eventId; // flat map to this
+        bytes32 accountId;
+        bytes32 liquidatedAssetHash;
+        int128 insuranceTransferAmount;
+        uint64 timestamp;
+        bool isInsuranceAccount;
+        EventTypes.LiquidationTransferV3[] liquidationTransfers;
+    }
+
+    struct MarginTransferV3Signature {
+        uint64 eventId; // flat map to this
+        bytes32 accountId;
+        int128 transferAmount;
+        bytes32 transferAssetHash;
+        bytes32 isoSymbolHash;
+        uint64 timestamp;
+    }
+
     struct EventUploadSignature {
         uint64 batchId;
         WithdrawDataSignature[] withdraws;
@@ -335,6 +403,10 @@ library Signature {
         BalanceTransferSignature[] balanceTransfers;
         SwapUploadSignature[] swapUploads;
         Withdraw2ContractV2Signature[] withdraw2ContractV2s;
+        SettlementV3Signature[] isoSettlements;
+        AdlV3Signature[] isoAdls;
+        LiquidationV3Signature[] isoLiquidations;
+        MarginTransferV3Signature[] isoMarginTransfers;        
     }
 
     error UnsupportedBizType(uint8 bizType);
@@ -347,12 +419,12 @@ library Signature {
         // 0: withdraws + delegate, 1: settlements, 2: adls, 3: liquidations
         // 4: feeDistributions, 5: delegateSigners, 6: null, 7: adlV2s, 8: liquidationV2s
         // 9: withdrawSol, 10: withdraw2Contract, 11: balanceTransfer, 12: swapUploads
-        // 13: withdraw2ContractV2
-        uint8[] memory countArray = new uint8[](14);
-        uint8[] memory countArray2 = new uint8[](14);
+        // 13: withdraw2ContractV2, 14: isoSettlements, 15: isoAdls, 16: isoLiquidations, 17: isoMarginTransfers
+        uint8[] memory countArray = new uint8[](18);
+        uint8[] memory countArray2 = new uint8[](18);
         uint256 len = data.events.length;
         for (uint256 i = 0; i < len; i++) {
-            if (data.events[i].bizType > 14) {
+            if (data.events[i].bizType > 18) {
                 revert UnsupportedBizType(data.events[i].bizType);
             }
             countArray[data.events[i].bizType - 1]++;
@@ -371,7 +443,11 @@ library Signature {
             withdraw2Contracts: new Withdraw2ContractSignature[](countArray[10]),
             balanceTransfers: new BalanceTransferSignature[](countArray[11]),
             swapUploads: new SwapUploadSignature[](countArray[12]),
-            withdraw2ContractV2s: new Withdraw2ContractV2Signature[](countArray[13])
+            withdraw2ContractV2s: new Withdraw2ContractV2Signature[](countArray[13]),
+            isoSettlements: new SettlementV3Signature[](countArray[14]),
+            isoAdls: new AdlV3Signature[](countArray[15]),
+            isoLiquidations: new LiquidationV3Signature[](countArray[16]),
+            isoMarginTransfers: new MarginTransferV3Signature[](countArray[17])
         });
 
         for (uint256 i = 0; i < len; i++) {
@@ -578,13 +654,107 @@ library Signature {
                 });
                 eventUploadSignature.withdraw2ContractV2s[countArray2[13]] = withdraw2ContractV2Signature;
                 countArray2[13]++;
-            } else {
+            } else if (eventUploadData.bizType == uint8(BizType.SettlementV3)) {
+                EventTypes.SettlementV3 memory isoSettlement =
+                    abi.decode(eventUploadData.data, (EventTypes.SettlementV3));
+                SettlementV3Signature memory isoSettlementSignature = SettlementV3Signature({
+                    eventId: eventUploadData.eventId,
+                    accountId: isoSettlement.accountId,
+                    settledAmount: isoSettlement.settledAmount,
+                    settledAssetHash: isoSettlement.settledAssetHash,
+                    insuranceAccountId: isoSettlement.insuranceAccountId,
+                    insuranceTransferAmount: isoSettlement.insuranceTransferAmount,
+                    isoSettlementExecutions: isoSettlement.isoSettlementExecutions,
+                    timestamp: isoSettlement.timestamp
+                });
+                eventUploadSignature.isoSettlements[countArray2[14]] = isoSettlementSignature;
+                countArray2[14]++;
+            } else if (eventUploadData.bizType == uint8(BizType.AdlV3)) {
+                EventTypes.AdlV3 memory isoAdl =
+                    abi.decode(eventUploadData.data, (EventTypes.AdlV3));
+                AdlV3Signature memory isoAdlSignagure = AdlV3Signature({
+                    eventId: eventUploadData.eventId,
+                    accountId: isoAdl.accountId,
+                    symbolHash: isoAdl.symbolHash,
+                    positionQtyTransfer: isoAdl.positionQtyTransfer,
+                    costPositionTransfer: isoAdl.costPositionTransfer,
+                    adlPrice: isoAdl.adlPrice,
+                    sumUnitaryFundings: isoAdl.sumUnitaryFundings,
+                    timestamp: isoAdl.timestamp,
+                    isInsuranceAccount: isoAdl.isInsuranceAccount,
+                    marginMode: isoAdl.marginMode,
+                    isoMarginAssetHash: isoAdl.isoMarginAssetHash,
+                    isoMargin: isoAdl.marginToCross
+                });
+                eventUploadSignature.isoAdls[countArray2[15]] = isoAdlSignagure;
+                countArray2[15]++;
+            } else if (eventUploadData.bizType == uint8(BizType.LiquidationV3)) {
+                EventTypes.LiquidationV3 memory isoLiquidation =
+                    abi.decode(eventUploadData.data, (EventTypes.LiquidationV3));
+                LiquidationV3Signature memory isoLiquidationSignature = LiquidationV3Signature({
+                    eventId: eventUploadData.eventId,
+                    accountId: isoLiquidation.accountId,
+                    liquidatedAssetHash: isoLiquidation.liquidatedAssetHash,
+                    insuranceTransferAmount: isoLiquidation.insuranceTransferAmount,
+                    timestamp: isoLiquidation.timestamp,
+                    isInsuranceAccount: isoLiquidation.isInsuranceAccount,
+                    liquidationTransfers: isoLiquidation.liquidationTransfers 
+                });
+                eventUploadSignature.isoLiquidations[countArray2[16]] = isoLiquidationSignature;
+                countArray2[16]++;
+            } else if (eventUploadData.bizType == uint8(BizType.MarginTransferV3)) {
+                EventTypes.MarginTransferV3 memory isoMarginTransfer =
+                    abi.decode(eventUploadData.data, (EventTypes.MarginTransferV3));
+                MarginTransferV3Signature memory isoMarginTransferSignature = MarginTransferV3Signature({
+                    eventId: eventUploadData.eventId,
+                    accountId: isoMarginTransfer.accountId,
+                    transferAmount: isoMarginTransfer.marginFromCross,
+                    transferAssetHash: isoMarginTransfer.transferAssetHash,
+                    isoSymbolHash: isoMarginTransfer.isoSymbolHash,
+                    timestamp: isoMarginTransfer.timestamp
+                });
+                eventUploadSignature.isoMarginTransfers[countArray2[17]] = isoMarginTransferSignature;
+                countArray2[17]++;
+            }
+             else {
                 // should never happen
                 revert UnsupportedBizType(eventUploadData.bizType);
             }
         }
         bytes memory encoded;
-        if (eventUploadSignature.withdraw2ContractV2s.length > 0) {
+       
+        if (eventUploadSignature.isoSettlements.length > 0 || 
+            eventUploadSignature.isoAdls.length > 0 || 
+            eventUploadSignature.isoLiquidations.length > 0 || 
+            eventUploadSignature.isoMarginTransfers.length > 0
+         ) {
+            // v10 signature, only support [v9, isoSettlements, isoAdls, isoLiquidations, isoMarginTransfers]
+            // @dev abi.encode function with 14 parameters here will cause "Stack too deep" error, so we split it into two steps.
+            // @dev cefi should adjust its encode schema to this change.
+            bytes memory p1 = abi.encode(
+                eventUploadSignature.batchId,
+                eventUploadSignature.withdraws,
+                eventUploadSignature.settlements,
+                eventUploadSignature.adls,
+                eventUploadSignature.liquidations,
+                eventUploadSignature.feeDistributions,
+                eventUploadSignature.delegateSigners,
+                eventUploadSignature.adlV2s,
+                eventUploadSignature.liquidationV2s,
+                eventUploadSignature.withdrawSols,
+                eventUploadSignature.withdraw2Contracts,
+                eventUploadSignature.balanceTransfers,
+                eventUploadSignature.swapUploads
+            );
+            encoded = abi.encode(
+                p1,
+                eventUploadSignature.withdraw2ContractV2s,
+                eventUploadSignature.isoSettlements,
+                eventUploadSignature.isoAdls,
+                eventUploadSignature.isoLiquidations,
+                eventUploadSignature.isoMarginTransfers
+            );  
+        } else if (eventUploadSignature.withdraw2ContractV2s.length > 0) {
             // v9 signature, only support [v8, withdraw2ContractV2s]
             // @dev abi.encode function with 14 parameters here will cause "Stack too deep" error, so we split it into two steps.
             // @dev cefi should adjust its encode schema to this change.
@@ -603,7 +773,10 @@ library Signature {
                 eventUploadSignature.balanceTransfers,
                 eventUploadSignature.swapUploads
             );
-            encoded = abi.encode(p1, eventUploadSignature.withdraw2ContractV2s);
+            encoded = abi.encode(
+                p1,
+                eventUploadSignature.withdraw2ContractV2s
+            );
         } else if (eventUploadSignature.swapUploads.length > 0) {
             // v8 signature, only support [v7, swapUploads]
             encoded = abi.encode(
@@ -769,5 +942,26 @@ library Signature {
         );
         bytes32 h = ECDSA.toEthSignedMessageHash(keccak256(encoded));
         return verify(h, data.r, data.s, data.v, signer);
+    }
+
+    /// @notice Verify CEFI signature for permissionless listing `OperatorManager.setAllowedSymbol`.
+    /// @param symbolHash keccak256 of symbol (e.g. PERP_BTC_USDC)
+    /// @param allowed true to allow, false to disallow
+    /// @param sequenceId anti-replay sequence from CEFI
+    /// @param signature CEFI ECDSA signature (65 bytes r+s+v or 64 bytes r+vs)
+    /// @param signer expected signer (permissionlessListingSignerAddress)
+    /// @return true if recovered address equals signer
+    function setAllowedSymbolEncodeHashVerify(
+        bytes32 symbolHash,
+        bool allowed,
+        uint64 sequenceId,
+        uint256 chainId,
+        bytes calldata signature,
+        address signer
+    ) internal pure returns (bool) {
+        bytes32 messageHash = keccak256(abi.encode(symbolHash, allowed, sequenceId, chainId));
+        bytes32 ethSignedHash = ECDSA.toEthSignedMessageHash(messageHash);
+        address recovered = ECDSA.recover(ethSignedHash, signature);
+        return recovered == signer;
     }
 }

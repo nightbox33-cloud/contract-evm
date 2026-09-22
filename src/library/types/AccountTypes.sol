@@ -15,6 +15,19 @@ library AccountTypes {
         uint128 lastAdlPrice;
     }
 
+    struct IsoPerpPosition {
+        int128 positionQty;
+        int128 costPosition;
+        int128 lastSumUnitaryFundings;
+        uint128 lastExecutedPrice;
+        uint128 lastSettledPrice;
+        uint128 averageEntryPrice;
+        int128 openingCost;
+        uint128 lastAdlPrice;
+        // Multi-collateral margin support: tokenHash => margin amount
+        mapping(bytes32 => int128) margins;
+    }
+
     // account id, unique for each account, should be accountId -> {addr, brokerId}
     // and keccak256(addr, brokerID) == accountId
     struct Account {
@@ -44,6 +57,8 @@ library AccountTypes {
         uint64 lastDepositSrcChainNonce;
         // solana account public key
         bytes32 solAccountPubKey;
+        // mapping trade symbol hash => IsoPerpPosition
+        mapping(bytes32 => IsoPerpPosition) isoPerpPositions;
     }
 
     struct AccountDeposit {
@@ -87,6 +102,13 @@ library AccountTypes {
         uint128 frozenBalance;
     }
 
+    struct AccountBalanceSnapshot {
+        bytes32 accountId;
+        bytes32 brokerHash;
+        address userAddress;
+        AccountTokenBalances[] tokenBalances;
+    }
+
     struct AccountPerpPositions {
         // symbol hash
         bytes32 symbolHash;
@@ -101,6 +123,7 @@ library AccountTypes {
         uint128 lastAdlPrice;
     }
 
+
     // for batch get
     struct AccountSnapshot {
         bytes32 accountId;
@@ -112,6 +135,41 @@ library AccountTypes {
         uint64 lastDepositEventId;
         AccountTokenBalances[] tokenBalances;
         AccountPerpPositions[] perpPositions;
+        uint64 lastDepositSrcChainId;
+        uint64 lastDepositSrcChainNonce;
+    }
+
+    struct AccountMargins{
+        bytes32 marginAssetHash;
+        int128 margin;
+    }
+
+    struct AccountIsoPerpPositions {
+        // symbol hash
+        bytes32 symbolHash;
+        // perp position
+        int128 positionQty;
+        int128 costPosition;
+        int128 lastSumUnitaryFundings;
+        uint128 lastExecutedPrice;
+        uint128 lastSettledPrice;
+        uint128 averageEntryPrice;
+        int128 openingCost;
+        uint128 lastAdlPrice;
+        AccountMargins[] margins;
+    }
+
+    struct AccountSnapshotV3 {
+        bytes32 accountId;
+        bytes32 brokerHash;
+        address userAddress;
+        uint64 lastWithdrawNonce;
+        uint64 lastPerpTradeId;
+        uint64 lastEngineEventId;
+        uint64 lastDepositEventId;
+        AccountTokenBalances[] tokenBalances;
+        AccountPerpPositions[] perpPositions;
+        AccountIsoPerpPositions[] isoPerpPositions;
         uint64 lastDepositSrcChainId;
         uint64 lastDepositSrcChainNonce;
     }

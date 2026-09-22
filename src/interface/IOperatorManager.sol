@@ -15,6 +15,10 @@ interface IOperatorManager is IError, IOperatorManagerEvent {
 
     // operator call futures trade upload
     function futuresTradeUpload(PerpTypes.FuturesTradeUploadData calldata data) external;
+    // operator call iso futures trade upload
+    function futuresTradeUploadV3(PerpTypes.FuturesTradeUploadDataV3 calldata data) external;
+    // operator call futures trade upload V4 (V3 + isInsuranceAccount flag per trade)
+    function futuresTradeUploadV4(PerpTypes.FuturesTradeUploadDataV4 calldata data) external;
     // operator call event upload
     function eventUpload(EventTypes.EventUpload calldata data) external;
     // operator call perp market info
@@ -29,6 +33,10 @@ interface IOperatorManager is IError, IOperatorManagerEvent {
     // check if engine down
     function checkEngineDown() external returns (bool);
 
+    // operator call permissionless listing: set allowed symbol (CEFI-signed)
+    function setAllowedSymbol(bytes32 _symbolHash, bool _allowed, uint64 _sequenceId, uint256 _chainId, bytes calldata _cefiSignature)
+        external;
+    
     // admin call
     function setOperator(address _operatorAddress) external;
     function setLedger(address _ledger) external;
@@ -41,4 +49,6 @@ interface IOperatorManager is IError, IOperatorManagerEvent {
     function setOperatorManagerZipAddress(address _operatorManagerZipAddress) external;
     function setOperatorManagerImplA(address _operatorManagerImplA) external;
     function setOperatorManagerImplB(address _operatorManagerImplB) external;
+    function setVaultManager(address _vaultManager) external;
+    function setPermissionlessListingSignerAddress(address _permissionlessListingSignerAddress) external;
 }

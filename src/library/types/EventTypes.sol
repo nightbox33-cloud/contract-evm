@@ -86,6 +86,25 @@ library EventTypes {
         int128 settledAmount;
     }
 
+    struct SettlementExecutionV3 {
+        bytes32 symbolHash;
+        uint128 markPrice;
+        int128 sumUnitaryFundings;
+        int128 settledAmount; // USDC amount
+        uint8 marginMode; // 1 isolated 0 cross
+        bytes32 isoMarginAssetHash;
+    }
+
+    struct SettlementV3 {
+        bytes32 accountId;
+        int128 settledAmount; 
+        bytes32 settledAssetHash; // should alwasy be USDC
+        bytes32 insuranceAccountId;
+        uint128 insuranceTransferAmount;  // should be 0
+        SettlementExecutionV3[] isoSettlementExecutions;
+        uint64 timestamp;
+    }
+
     struct Adl {
         bytes32 accountId;
         bytes32 insuranceAccountId;
@@ -106,6 +125,20 @@ library EventTypes {
         int128 sumUnitaryFundings;
         uint64 timestamp;
         bool isInsuranceAccount;
+    }
+
+    struct AdlV3 {
+        bytes32 accountId;
+        bytes32 symbolHash;
+        int128 positionQtyTransfer;
+        int128 costPositionTransfer;
+        uint128 adlPrice;
+        int128 sumUnitaryFundings;
+        uint64 timestamp;
+        bool isInsuranceAccount;
+        uint8 marginMode;
+        bytes32 isoMarginAssetHash;
+        int128 marginToCross;  // margin release amount
     }
 
     struct Liquidation {
@@ -146,6 +179,39 @@ library EventTypes {
         int128 fee;
         uint128 markPrice;
         int128 sumUnitaryFundings;
+    }
+
+    struct LiquidationTransferV3 {
+        bytes32 symbolHash;
+        int128 positionQtyTransfer;
+        int128 costPositionTransfer;
+        int128 fee;
+        uint128 markPrice;
+        int128 sumUnitaryFundings;
+        uint8 marginMode; // 0 1
+        bytes32 isoMarginAssetHash;
+        int128 marginToCross;   // margin release amount
+    }
+
+    struct LiquidationV3 {
+        bytes32 accountId;
+        bytes32 liquidatedAssetHash;
+        int128 insuranceTransferAmount;
+        uint64 timestamp;
+        bool isInsuranceAccount;
+        // 0th item, decide iso or cross 0th.marginMode == 1
+        // 000000   <--- might contain multiple liquidation transfers for cross-margin mode
+        // 1        <--- must be iso and only contain one liquidation transfer
+        // else revert
+        LiquidationTransferV3[] liquidationTransfers;
+    }
+
+    struct MarginTransferV3 {
+        bytes32 accountId;
+        int128 marginFromCross;
+        bytes32 transferAssetHash;
+        bytes32 isoSymbolHash;
+        uint64 timestamp;
     }
 
     struct FeeDistribution {

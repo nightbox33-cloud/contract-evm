@@ -100,4 +100,6 @@ contract VaultManagerBuggy is IVaultManager, LedgerComponent {
     function setProtocolVaultAddress(address _protocolVaultAddress) external override {}
 
     function getProtocolVaultAddress() external view override returns (address) {}
+
+    function setAllowedSymbolByOperator(bytes32 symbolHash, bool allowed) external override {}
 }

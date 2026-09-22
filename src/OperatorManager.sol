@@ -8,6 +8,7 @@ import "./interface/IOperatorManager.sol";
 import "./interface/IOperatorManagerImplA.sol";
 import "./interface/IOperatorManagerImplB.sol";
 import "./library/Signature.sol";
+import "./interface/IVaultManager.sol";
 
 
 /// @title Operator call this manager for update data
@@ -134,6 +135,24 @@ contract OperatorManager is IOperatorManager, OwnableUpgradeable, OperatorManage
         marketManager = IMarketManager(_marketManagerAddress);
     }
 
+    /// @notice Set the address of VaultManager for permissionless listing (setAllowedSymbolByOperator)
+    function setVaultManager(address _vaultManager) external override onlyOwner nonZeroAddress(_vaultManager) {
+        address oldVaultManager = address(vaultManager);
+        vaultManager = IVaultManager(_vaultManager);
+        emit SetVaultManager(oldVaultManager, _vaultManager);
+    }
+
+    /// @notice Set the CEFI signer address for permissionless listing (setAllowedSymbol signature verification)
+    function setPermissionlessListingSignerAddress(address _permissionlessListingSignerAddress)
+        external
+        override
+        onlyOwner
+        nonZeroAddress(_permissionlessListingSignerAddress)
+    { 
+        emit SetPermissionlessListingSignerAddress(permissionlessListingSignerAddress, _permissionlessListingSignerAddress);
+        permissionlessListingSignerAddress = _permissionlessListingSignerAddress;
+    }
+
     /// @notice Set the address of operator manager impl A contract
     function setOperatorManagerImplA(address _operatorManagerImplA)
         external
@@ -185,6 +204,22 @@ contract OperatorManager is IOperatorManager, OwnableUpgradeable, OperatorManage
         );
     }
 
+    function futuresTradeUploadV3(PerpTypes.FuturesTradeUploadDataV3 calldata data) external override onlyOperator {
+        _delegatecall(
+            abi.encodeWithSelector(IOperatorManagerImplA.futuresTradeUploadV3.selector, data),
+            _getOperatorManagerStorage().operatorManagerImplA
+        );
+    }
+
+    /// @notice Function for perpetual futures trade upload V4 (V3 + `isInsuranceAccount` flag per trade)
+    function futuresTradeUploadV4(PerpTypes.FuturesTradeUploadDataV4 calldata data) external override onlyOperator {
+        _delegatecall(
+            abi.encodeWithSelector(IOperatorManagerImplA.futuresTradeUploadV4.selector, data),
+            _getOperatorManagerStorage().operatorManagerImplA
+        );
+    }
+
+
     /// @notice Function for event upload
     function eventUpload(EventTypes.EventUpload calldata data) external override onlyOperator {
         _delegatecall(
@@ -199,6 +234,42 @@ contract OperatorManager is IOperatorManager, OwnableUpgradeable, OperatorManage
             abi.encodeWithSelector(IOperatorManagerImplA.perpPriceUpload.selector, data),
             _getOperatorManagerStorage().operatorManagerImplA
         );
+    }
+
+    
+    /// @notice Permissionless listing: set allowed symbol by Operator with CEFI signature and sequenceId anti-replay.
+    /// @param _symbolHash keccak256(symbol), e.g. PERP_BTC_USDC
+    /// @param _allowed true to allow, false to disallow
+    /// @param _sequenceId CEFI sequence id (must equal permissionlessListingSequenceId + 1)
+    /// @param _chainId chain id (must equal block.chainid)
+    /// @param _cefiSignature CEFI ECDSA signature over `keccak256(abi.encode(symbolHash, allowed, sequenceId, chainId))`
+    function setAllowedSymbol(
+        bytes32 _symbolHash,
+        bool _allowed,
+        uint64 _sequenceId,
+        uint256 _chainId,
+        bytes calldata _cefiSignature
+    ) external override onlyOperator {
+        if (address(vaultManager) == address(0)) revert VaultManagerNotSet();
+        if (permissionlessListingSignerAddress == address(0)) revert PermissionlessListingSignerNotSet();
+        if (_chainId != block.chainid) revert InvalidChainId(_chainId, block.chainid);
+
+        uint64 expectedSequenceId = permissionlessListingSequenceId + 1;
+        if (_sequenceId != expectedSequenceId) revert InvalidSequenceId(_sequenceId, expectedSequenceId);
+
+        bool valid = Signature.setAllowedSymbolEncodeHashVerify(
+            _symbolHash,
+            _allowed,
+            _sequenceId,
+            _chainId,
+            _cefiSignature,
+            permissionlessListingSignerAddress
+        );
+        if (!valid) revert SignatureNotMatch();
+
+        permissionlessListingSequenceId = _sequenceId;
+        vaultManager.setAllowedSymbolByOperator(_symbolHash, _allowed);
+        emit SetAllowedSymbolByOperator(_symbolHash, _allowed, _sequenceId);
     }
 
     /// @notice Function for sum unitary fundings upload
@@ -264,6 +335,10 @@ contract OperatorManager is IOperatorManager, OwnableUpgradeable, OperatorManage
         bizTypeToSelectors[uint8(Signature.BizType.BalanceTransfer)] =  ILedger.executeBalanceTransfer.selector;            
         bizTypeToSelectors[uint8(Signature.BizType.SwapResult)] =  ILedger.executeSwapResultUpload.selector;
         bizTypeToSelectors[uint8(Signature.BizType.Withdraw2ContractV2)] =  ILedger.executeWithdraw2ContractV2.selector;
+        bizTypeToSelectors[uint8(Signature.BizType.SettlementV3)] =  ILedger.executeSettlementV3.selector;
+        bizTypeToSelectors[uint8(Signature.BizType.AdlV3)] =  ILedger.executeAdlV3.selector;
+        bizTypeToSelectors[uint8(Signature.BizType.LiquidationV3)] =  ILedger.executeLiquidationV3.selector;
+        bizTypeToSelectors[uint8(Signature.BizType.MarginTransferV3)] =  ILedger.executeMarginTransferV3.selector;
     }
 
     function getOperatorManagerImpl() external view returns (address, address) {

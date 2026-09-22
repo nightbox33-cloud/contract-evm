@@ -15,6 +15,7 @@ import "../src/MarketManager.sol";
 import "../src/FeeManager.sol";
 import "./cheater/LedgerCheater.sol";
 import "../src/LedgerImplA.sol";
+import "../src/LedgerImplView.sol";
 
 import "forge-std/console.sol";
 import "../src/library/typesHelper/SafeCastHelper.sol";
@@ -151,6 +152,7 @@ contract VaultTest is Test {
 
         // do not change the order
         LedgerImplA ledgerImplA = new LedgerImplA();
+        LedgerImplView ledgerImplView = new LedgerImplView();
 
         ledger.setOperatorManagerAddress(address(operatorManager));
         ledger.setCrossChainManager(address(ledgerCrossChainManager));
@@ -158,6 +160,7 @@ contract VaultTest is Test {
         ledger.setFeeManager(address(feeManager));
         ledger.setMarketManager(address(marketManager));
         ledger.setLedgerImplA(address(ledgerImplA));
+        ledger.setLedgerImplView(address(ledgerImplView));
 
         operatorManager.setOperator(operatorAddress);
         operatorManager.setLedger(address(ledger));
@@ -232,5 +235,35 @@ contract VaultTest is Test {
         // User && Vault balance check
         assertEq(tUSDC.balanceOf(address(SENDER_WITHDRAW)), AMOUNT);
         assertEq(tUSDC.balanceOf(address(vault)), 0);
+    }
+}
+
+struct TestStruct {
+    uint8 a;
+    mapping(bytes32 => uint8) b;
+}
+contract StorageTest is Test {
+    mapping(bytes32 => TestStruct) public  tests;
+
+    function test_StorageMappingInStruct() public {
+        tests[bytes32("test")].a = 1;
+        tests[bytes32("test")].b[bytes32("key1")] = 42;
+
+        assertEq(tests[bytes32("test")].a, 1);
+        assertEq(tests[bytes32("test")].b[bytes32("key1")], 42);
+    }
+
+    function test_DeleteMappingInStruct() public {
+        tests[bytes32("test")].a = 1;
+        tests[bytes32("test")].b[bytes32("key1")] = 42;
+
+        delete tests[bytes32("test")];
+        assertEq(tests[bytes32("test")].a, 0);
+        assertEq(tests[bytes32("test")].b[bytes32("key1")], 42);
+
+        delete tests[bytes32("test")].b[bytes32("key1")];
+        assertEq(tests[bytes32("test")].b[bytes32("key1")], 0);
+
+
     }
 }

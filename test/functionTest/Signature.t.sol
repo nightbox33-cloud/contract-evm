@@ -1359,6 +1359,462 @@ contract SignatureTest is Test {
         assertEq(succ2, true);
 
     }
+
+    function test_setAllowedSymbolEncodeHashVerify() public {
+        // signature in doc was produced with chainId = 291; must set so block.chainid matches
+        vm.chainId(291);
+
+        // real parameters (from doc list-with-operator-indexer.md test case)
+        bytes32 symbolHash = 0xe3ed72b93c91c8c78347689fd6f9b0d13a00f484b9d3cdc8413bcf4a53c90e89;
+        bool allowed = true;
+        uint64 sequenceId = 123456;
+
+        // cefi_signature from document (signed over abi.encode(symbolHash, allowed, sequenceId, chainId=291))
+        bytes memory signature = hex"5fe2a74173bf668ecaeff14e54f8f69b756661fe1ed0ae2ec646ea4458d41bb534455b35c0fa0392043e232b3ec37716abaf8347f697256bc6ab1b0790253c221b";
+
+        // signer = derived_address in the document
+        address signer = address(0xd0cc54C0719b0fBb172D518cc25Bd80C5C908439);
+
+        bool succ = this._callSetAllowedSymbolEncodeHashVerify(
+            symbolHash,
+            allowed,
+            sequenceId,
+            block.chainid,
+            signature,
+            signer
+        );
+        assertEq(succ, true);
+    }
+
+    // helper: expose internal library for test; chainId comes from block.chainid inside library
+    function _callSetAllowedSymbolEncodeHashVerify(
+        bytes32 symbolHash,
+        bool allowed,
+        uint64 sequenceId,
+        uint256 chainId,
+        bytes calldata signature,
+        address signer
+    ) external view returns (bool) {
+        return Signature.setAllowedSymbolEncodeHashVerify(
+            symbolHash,
+            allowed,
+            sequenceId,
+            chainId,
+            signature,
+            signer
+        );
+    }
+
+    
+    function test_isoPerpUploadEncodeHash() public {
+        PerpTypes.FuturesTradeUploadV3 memory t1 = PerpTypes.FuturesTradeUploadV3({
+            tradeId: 417733,
+            matchId: 1681722208647262950,
+            accountId: 0x798382c524266a61dc6c59a87b783b8208b8d204960a796539ef8de44f85f91b,
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            side: true,
+            tradeQty: 500000000,
+            notional: 55000000,
+            executedPrice: 1100000000,
+            fee: 5000,
+            feeAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            sumUnitaryFundings: 1000000000000000,
+            timestamp: 1681693408647,
+            marginMode: 0,
+            isoMarginAssetHash: 0x0000000000000000000000000000000000000000000000000000000000000000,
+            marginFromCross: 0
+        });
+        
+        {
+            PerpTypes.FuturesTradeUploadV3[] memory trades = new PerpTypes.FuturesTradeUploadV3[](1);
+            trades[0] = t1;
+
+            bool succ = Signature.perpUploadEncodeHashVerify(
+                PerpTypes.FuturesTradeUploadDataV3({
+                    batchId: 18,
+                    count: 1,
+                    trades: trades,
+                    r: 0xe09ce05431cdae94d288cd190dd9bfb3a0fb9110873369405317554cb04f3f7f,
+                    s: 0x329d05fb0ee78f75907b6ee5af445d801dcf141c765c60f721e6d015f80cac1a,
+                    v: 0x1b
+                }),
+                addr
+            );
+
+            assertEq(succ, true);
+        }
+
+        PerpTypes.FuturesTradeUploadV3 memory t2 = PerpTypes.FuturesTradeUploadV3({
+            tradeId: 417734,
+            matchId: 1681722208647262951,
+            accountId: 0xdcefa08407db5aae7466c3ae93d7807967c2f3345a23644051a4d4c9761b18d2,
+            symbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            side: false,
+            tradeQty: -500000000,
+            notional: -55000000,
+            executedPrice: 1100000000,
+            fee: 5000,
+            feeAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            sumUnitaryFundings: 1000000000000000,
+            timestamp: 1681693408648,
+            marginMode: 1,
+            isoMarginAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            marginFromCross: 1000000
+        });
+
+        PerpTypes.FuturesTradeUploadV3 memory t3 = PerpTypes.FuturesTradeUploadV3({
+            tradeId: 417735,
+            matchId: 1681722208647262952,
+            accountId: 0x7efabf5f5e8a511811db85e9cc0c0818cb070c0aa0daeddf38d742739428e3d1,
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            side: true,
+            tradeQty: 100000000,
+            notional: 11000000,
+            executedPrice: 1100000000,
+            fee: 1000,
+            feeAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            sumUnitaryFundings: 1000000000000000,
+            timestamp: 1681693408649,
+            marginMode: 1,
+            isoMarginAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            marginFromCross: -500000
+        });
+
+        {
+            PerpTypes.FuturesTradeUploadV3[] memory trades = new PerpTypes.FuturesTradeUploadV3[](3);
+            trades[0] = t1;
+            trades[1] = t2;
+            trades[2] = t3;
+
+            bool succ = Signature.perpUploadEncodeHashVerify(
+                PerpTypes.FuturesTradeUploadDataV3({
+                    batchId: 18,
+                    count: 3,
+                    trades: trades,
+                    r: 0xfad50e43b4b572851fa027f84df5044cca9ea8f9c58074739624daa6c5f89266,
+                    s: 0x33a9fd65c3752e4e528158e4c47e6079814e45847b7d24b6d7e20af0541a611e,
+                    v: 0x1b
+                }),
+                addr
+            );
+
+            assertEq(succ, true);
+        }    
+
+    }
+
+    function test_eventUploadSettlementV3() public {
+        EventTypes.SettlementExecutionV3[] memory se = new EventTypes.SettlementExecutionV3[](2);
+        se[0] = EventTypes.SettlementExecutionV3({
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            markPrice: 22000000000000000,
+            sumUnitaryFundings: 12340000000000000000000000,
+            settledAmount: 101000000000000,
+            marginMode: 0,
+            isoMarginAssetHash: 0x0000000000000000000000000000000000000000000000000000000000000000
+        });
+        se[1] = EventTypes.SettlementExecutionV3({
+            symbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            markPrice: 25000000000000000,
+            sumUnitaryFundings: 15000000000000000000000000,
+            settledAmount: 150000000000000,
+            marginMode: 1,
+            isoMarginAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa
+        });
+        EventTypes.SettlementV3 memory s1 = EventTypes.SettlementV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed64,
+            settledAmount: 251000000000000,
+            settledAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            insuranceAccountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed66,
+            insuranceTransferAmount: 130000000000000,
+            timestamp: 1683270380555,
+            isoSettlementExecutions: se
+        });
+
+        EventTypes.EventUploadData[] memory events = new EventTypes.EventUploadData[](1);
+        events[0] = EventTypes.EventUploadData({bizType: 15, eventId: 15, data: abi.encode(s1)});
+        EventTypes.EventUpload memory e1 = EventTypes.EventUpload({
+            events: events,
+            r: 0x7fc84265f070641d3d5958fb51300f974241619f6b5968904984105ac6082957,
+            s: 0x504b1e550391043fd625630073ec7ef15df9ce5cd6efca112c4d4e8f8797fdb4,
+            v: 0x1c,
+            count: 1,
+            batchId: 100
+        });
+
+        bytes memory abiData1 = Signature.eventsUploadEncodeHash(e1);
+
+        bytes memory correctAbiData1 = hex"00000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000004200000000000000000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000000000000000000000072000000000000000000000000000000000000000000000000000000000000007400000000000000000000000000000000000000000000000000000000000000320000000000000000000000000000000000000000000000000000000000000006400000000000000000000000000000000000000000000000000000000000001a000000000000000000000000000000000000000000000000000000000000001c000000000000000000000000000000000000000000000000000000000000001e00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000022000000000000000000000000000000000000000000000000000000000000002400000000000000000000000000000000000000000000000000000000000000260000000000000000000000000000000000000000000000000000000000000028000000000000000000000000000000000000000000000000000000000000002a000000000000000000000000000000000000000000000000000000000000002c000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000f1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed640000000000000000000000000000000000000000000000000000e4487dd6b000d6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed660000000000000000000000000000000000000000000000000000763bfbd22000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000187eabbac0b00000000000000000000000000000000000000000000000000000000000000025a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d000000000000000000000000000000000000000000000000004e28e2290f00000000000000000000000000000000000000000000000a3518bd8c65ef3880000000000000000000000000000000000000000000000000000000005bdbe51f5000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb0000000000000000000000000000000000000000000000000058d15e176280000000000000000000000000000000000000000000000c685fa11e01ec6f0000000000000000000000000000000000000000000000000000000000886c98b760000000000000000000000000000000000000000000000000000000000000000001d6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+
+        assertEq(abiData1, correctAbiData1, "encode wrong");
+
+        bool succ = Signature.eventsUploadEncodeHashVerify(e1, addr);
+        assertEq(succ, true, "signature wrong");
+    }
+
+    function test_eventUploadAdlV3() public {
+        EventTypes.AdlV3 memory a1 = EventTypes.AdlV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed64,
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            positionQtyTransfer: 200000000000000000,
+            costPositionTransfer: 44000000000000,
+            adlPrice: 22000000000000000,
+            sumUnitaryFundings: 12340000000000000000000000,
+            timestamp: 1683270380531,
+            isInsuranceAccount: false,
+            marginMode: 0,
+            isoMarginAssetHash: 0x0000000000000000000000000000000000000000000000000000000000000000,
+            marginToCross: 0
+        });
+        EventTypes.AdlV3 memory a2 = EventTypes.AdlV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed65,
+            symbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            positionQtyTransfer: 300000000000000000,
+            costPositionTransfer: 55000000000000,
+            adlPrice: 25000000000000000,
+            sumUnitaryFundings: 15000000000000000000000000,
+            timestamp: 1683270380532,
+            isInsuranceAccount: true,
+            marginMode: 1,
+            isoMarginAssetHash: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed68,
+            marginToCross: 1000000000000
+        });
+        EventTypes.AdlV3 memory a3 = EventTypes.AdlV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed66,
+            symbolHash: 0x2f1991e99a4e22a9e95ff1b67aee336b4047dc47612e36674fa23eb8c6017f2e,
+            positionQtyTransfer: 100000000000000000,
+            costPositionTransfer: 22000000000000,
+            adlPrice: 18000000000000000,
+            sumUnitaryFundings: 8000000000000000000000000,
+            timestamp: 1683270380533,
+            isInsuranceAccount: false,
+            marginMode: 1,
+            isoMarginAssetHash: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed69,
+            marginToCross: -500000000000
+        });
+        EventTypes.EventUploadData[] memory events = new EventTypes.EventUploadData[](3);
+        events[0] = EventTypes.EventUploadData({bizType: 16, eventId: 16, data: abi.encode(a1)});
+        events[1] = EventTypes.EventUploadData({bizType: 16, eventId: 17, data: abi.encode(a2)});
+        events[2] = EventTypes.EventUploadData({bizType: 16, eventId: 18, data: abi.encode(a3)});
+        EventTypes.EventUpload memory e1 = EventTypes.EventUpload({
+            events: events,
+            r: 0x602144c588e1b4fe08fb41301673441405dee391b4baee5956ed04890ddd0a83,
+            s: 0x582066dae43b239d732363eae70dff345ec4b8bf01a0234387580931bf497733,
+            v: 0x1b,
+            count: 3,
+            batchId: 100
+        });
+
+        bool succ = Signature.eventsUploadEncodeHashVerify(e1, addr);
+        assertEq(succ, true);
+    }
+
+    function test_eventUploadLiquidationV3() public {
+        EventTypes.LiquidationTransferV3[] memory lt1 = new EventTypes.LiquidationTransferV3[](2);
+        lt1[0] = EventTypes.LiquidationTransferV3({
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            positionQtyTransfer: 200000000000000000,
+            costPositionTransfer: 44000000000000,
+            fee: 100000000000,
+            markPrice: 22000000000000000,
+            sumUnitaryFundings: 12340000000000000000000000,
+            marginMode: 0,
+            isoMarginAssetHash: 0x0000000000000000000000000000000000000000000000000000000000000000,
+            marginToCross: 0
+        });
+
+        lt1[1] = EventTypes.LiquidationTransferV3({
+            symbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            positionQtyTransfer: 300000000000000000,
+            costPositionTransfer: 55000000000000,
+            fee: 150000000000,
+            markPrice: 25000000000000000,
+            sumUnitaryFundings: 15000000000000000000000000,
+            marginMode: 1,
+            isoMarginAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            marginToCross: 1000000000000
+        });
+
+        
+        EventTypes.LiquidationV3 memory l1 = EventTypes.LiquidationV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed64,
+            liquidatedAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            insuranceTransferAmount: 11000000000000,
+            timestamp: 1683270380530,
+            isInsuranceAccount: false,
+            liquidationTransfers: lt1
+        });
+        
+        EventTypes.EventUploadData[] memory events = new EventTypes.EventUploadData[](1);
+        events[0] = EventTypes.EventUploadData({bizType: 17, eventId: 17, data: abi.encode(l1)});
+    
+        EventTypes.EventUpload memory e1 = EventTypes.EventUpload({
+            events: events,
+            r: 0x88f83d33a320a7fa86d691c98f0648d5beb6ece170370d4fe600bd1a74cb2c5a,
+            s: 0x5e9fc2365559559896ad8ffdf3a682c3de8cc8a4aac20190f4a213c470338b9c,
+            v: 0x1b,
+            count: 1,
+            batchId: 100
+        });
+
+
+        bool succ = Signature.eventsUploadEncodeHashVerify(e1, addr);
+        assertEq(succ, true);
+    }
+
+    function test_eventUploadMarginTransferV3() public {
+        EventTypes.MarginTransferV3 memory mt1 = EventTypes.MarginTransferV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed64,
+            marginFromCross: 5000000000000,
+            transferAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            isoSymbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            timestamp: 1683270380530
+        });
+
+        EventTypes.MarginTransferV3 memory mt2 = EventTypes.MarginTransferV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed65,
+            marginFromCross: -3000000000000,
+            transferAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            isoSymbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            timestamp: 1683270380531
+        });
+        
+        EventTypes.EventUploadData[] memory events = new EventTypes.EventUploadData[](2);
+        events[0] = EventTypes.EventUploadData({bizType: 18, eventId: 18, data: abi.encode(mt1)});
+        events[1] = EventTypes.EventUploadData({bizType: 18, eventId: 19, data: abi.encode(mt2)});
+        EventTypes.EventUpload memory e1 = EventTypes.EventUpload({
+            events: events,
+            r: 0xb965cb5bb406400c2d10a3810b9f4c1c0fe188a2e67fd4cc6c7e32e45768eb4c,
+            s: 0x13ee4db12af40712d03a38fa85f41be5b771e019e6fbf1b7f1fbc46cd160fd9a,
+            v: 0x1b,
+            count: 2,
+            batchId: 100
+        });
+
+        bytes memory encodedData = Signature.eventsUploadEncodeHash(e1);
+
+        // console.logBytes(encodedData);
+        // bytes32 messageHash = ECDSA.toEthSignedMessageHash(keccak256(encodedData));
+        
+        // (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVATE_KEY, messageHash);
+        // e1.r = r;
+        // e1.s = s;
+        // e1.v = v;
+
+        bool succ = Signature.eventsUploadEncodeHashVerify(e1, addr);
+        assertEq(succ, true);
+    }
+
+    function test_eventUploadIsoMultiple() public {
+        EventTypes.WithdrawData memory w1 = EventTypes.WithdrawData({
+            tokenAmount: 123000000,
+            fee: 5000000000,
+            chainId: 10086,
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed69,
+            r: 0x0,
+            s: 0x0,
+            v: 0x0,
+            sender: 0x6a9961Ace9bF0C1B8B98ba11558A4125B1f5EA3f,
+            withdrawNonce: 9,
+            receiver: 0x6a9961Ace9bF0C1B8B98ba11558A4125B1f5EA3f,
+            timestamp: 1683270380530,
+            brokerId: "woo_dex",
+            tokenSymbol: "USDC"
+        });
+        
+        EventTypes.SettlementExecutionV3[] memory se = new EventTypes.SettlementExecutionV3[](1);
+        se[0] = EventTypes.SettlementExecutionV3({
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            markPrice: 25000000000000000,
+            sumUnitaryFundings: 15000000000000000000000000,
+            settledAmount: 150000000000000,
+            marginMode: 1,
+            isoMarginAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa
+        });
+        EventTypes.SettlementV3 memory s1 = EventTypes.SettlementV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed67,
+            settledAmount: 150000000000000,
+            settledAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            insuranceAccountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed69,
+            insuranceTransferAmount: 75000000000000,
+            timestamp: 1683270380555,
+            isoSettlementExecutions: se
+        });
+
+        EventTypes.AdlV3 memory a1 = EventTypes.AdlV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed64,
+            symbolHash: 0x5a8133e52befca724670dbf2cade550c522c2410dd5b1189df675e99388f509d,
+            positionQtyTransfer: 200000000000000000,
+            costPositionTransfer: 44000000000000,
+            adlPrice: 22000000000000000,
+            sumUnitaryFundings: 12340000000000000000000000,
+            timestamp: 1683270380531,
+            isInsuranceAccount: false,
+            marginMode: 1,
+            isoMarginAssetHash: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed68,
+            marginToCross: 1000000000000
+        });
+
+        EventTypes.LiquidationTransferV3[] memory lt1 = new EventTypes.LiquidationTransferV3[](1);
+        lt1[0] = EventTypes.LiquidationTransferV3({
+            symbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            positionQtyTransfer: 300000000000000000,
+            costPositionTransfer: 55000000000000,
+            fee: 150000000000,
+            markPrice: 25000000000000000,
+            sumUnitaryFundings: 15000000000000000000000000,
+            marginMode: 1,
+            isoMarginAssetHash: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed69,
+            marginToCross: 2000000000000
+        });
+
+        
+        EventTypes.LiquidationV3 memory l1 = EventTypes.LiquidationV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed65,
+            liquidatedAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            insuranceTransferAmount: 5000000000000,
+            timestamp: 1683270380530,
+            isInsuranceAccount: false,
+            liquidationTransfers: lt1
+        });
+        
+        EventTypes.MarginTransferV3 memory mt1 = EventTypes.MarginTransferV3({
+            accountId: 0x1723cb226c337a417a6022890bc5671ebb4db551db0273536bf1094edf39ed68,
+            marginFromCross: 3000000000000,
+            transferAssetHash: 0xd6aca1be9729c13d677335161321649cccae6a591554772516700f986f942eaa,
+            isoSymbolHash: 0x7e83089239db756ee233fa8972addfea16ae653db0f692e4851aed546b21caeb,
+            timestamp: 1683270380532
+        });
+
+        EventTypes.EventUploadData[] memory events = new EventTypes.EventUploadData[](5);
+        events[0] = EventTypes.EventUploadData({bizType: 16, eventId: 16, data: abi.encode(a1)});
+        events[1] = EventTypes.EventUploadData({bizType: 17, eventId: 17, data: abi.encode(l1)});
+        events[2] = EventTypes.EventUploadData({bizType: 15, eventId: 15, data: abi.encode(s1)});
+        events[3] = EventTypes.EventUploadData({bizType: 18, eventId: 18, data: abi.encode(mt1)});
+        events[4] = EventTypes.EventUploadData({bizType: 1, eventId: 1, data: abi.encode(w1)});
+        EventTypes.EventUpload memory e1 = EventTypes.EventUpload({
+            events: events,
+            r: 0xef9b425f8960fa16d255b1635577687d8719a22fa22edd62829603694731e30c,
+            s: 0x39c4ca3d6c55599a59bf80784bd7f54d825213b18f71fa91f00150c9afef012d,
+            v: 0x1c,
+            count: 5,
+            batchId: 100
+        });
+
+        bytes memory encodedData = Signature.eventsUploadEncodeHash(e1);
+
+        // console.logBytes(encodedData);
+        // bytes32 messageHash = ECDSA.toEthSignedMessageHash(keccak256(encodedData));
+        
+        // (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVATE_KEY, messageHash);
+        // e1.r = r;
+        // e1.s = s;
+        // e1.v = v;
+
+        bool succ = Signature.eventsUploadEncodeHashVerify(e1, addr);
+        assertEq(succ, true);
+    }
+
     
     struct TestStruct {
             uint256 a;

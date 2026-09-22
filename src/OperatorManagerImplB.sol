@@ -77,9 +77,11 @@ contract OperatorManagerImplB is IOperatorManagerImplB, OwnableUpgradeable, Oper
         return
             bizType == uint8(Signature.BizType.Withdraw) ||
             bizType == uint8(Signature.BizType.Settlement) ||
+            bizType == uint8(Signature.BizType.SettlementV3) ||
             bizType == uint8(Signature.BizType.Liquidation) ||
-            bizType == uint8(Signature.BizType.DelegateWithdraw) ||
             bizType == uint8(Signature.BizType.LiquidationV2) ||
+            bizType == uint8(Signature.BizType.LiquidationV3) ||
+            bizType == uint8(Signature.BizType.DelegateWithdraw) ||
             bizType == uint8(Signature.BizType.WithdrawSol);
     }
     

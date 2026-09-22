@@ -11,6 +11,7 @@ import "../src/FeeManager.sol";
 import "./mock/LedgerCrossChainManagerMock.sol";
 import "./cheater/LedgerCheater.sol";
 import "../src/LedgerImplA.sol";
+import "../src/LedgerImplView.sol";
 
 import "../src/vaultSide/Vault.sol";
 import "../src/vaultSide/tUSDC.sol";
@@ -154,6 +155,7 @@ contract LedgerTest is Test {
 
         // do not change the order
         LedgerImplA ledgerImplA = new LedgerImplA();
+        LedgerImplView ledgerImplView = new LedgerImplView();
 
         ledger.setOperatorManagerAddress(address(operatorManager));
         ledger.setCrossChainManager(address(ledgerCrossChainManager));
@@ -161,6 +163,7 @@ contract LedgerTest is Test {
         ledger.setFeeManager(address(feeManager));
         ledger.setMarketManager(address(marketManager));
         ledger.setLedgerImplA(address(ledgerImplA));
+        ledger.setLedgerImplView(address(ledgerImplView));
 
         operatorManager.setOperator(operatorAddress);
         operatorManager.setLedger(address(ledger));
