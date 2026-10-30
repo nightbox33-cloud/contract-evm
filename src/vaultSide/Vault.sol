@@ -92,6 +92,10 @@ contract Vault is
     // Vault Adapter Address
     address public vaultAdapter;
 
+    /// @dev [AUDIT-FIX L-04] Reserved storage gap for future upgrades (append-only upgrade safety).
+    ///      New state variables must be added *before* this gap, and the gap size reduced accordingly.
+    uint256[42] private __gap;
+
     // CCTP V2 model constants
     uint32 public constant CCTP_V2_FAST_MODEL = 1000;
     uint32 public constant CCTP_V2_NORMAL_MODEL = 2000;
@@ -564,8 +568,20 @@ contract Vault is
                     tokenAddress.safeApprove(data.receiver, amount);
                     IProtocolVault(data.receiver)
                         .depositFromStrategy(data.clientId, data.brokerHash, address(tokenAddress), amount);
+                    /// @dev [AUDIT-FIX M-01] Never leave a dangling allowance behind: if the protocol
+                    /// vault does not pull the whole `amount`, the residual allowance would let it (or
+                    /// the strategy behind it) move vault funds that belong to other users, and a
+                    /// second withdraw to the same receiver would revert for tokens that require a
+                    /// zero -> non-zero approval (e.g. USDT).
+                    tokenAddress.safeApprove(data.receiver, 0);
                 } else if (data.vaultType == VaultTypes.VaultEnum.Ceffu) {
                     tokenAddress.safeTransfer(data.receiver, amount);
+                } else {
+                    /// @dev [AUDIT-FIX L-01] Unknown vault type: fail loudly instead of silently
+                    /// keeping the funds in the Vault while the Ledger has already debited the user
+                    /// (`IVaultCrossChainManager.withdraw()` was called at the beginning of this
+                    /// function and will finish the withdrawal on the Ledger side).
+                    revert UnsupportedVaultType(data.vaultType);
                 }
             }
         }
@@ -660,6 +676,9 @@ contract Vault is
         if (!_rebalanceEnableTokenSet.contains(data.tokenHash)) revert NotRebalanceEnableToken();
 
         /// Approve the token to be burned
+        /// @dev [AUDIT-FIX L-02] Use the same approve pattern as elsewhere and never leave a
+        ///      residual allowance behind if `depositForBurn` reverts (the failure is swallowed by
+        ///      the `catch` below, so the approval must be cleared explicitly).
         IERC20(burnToken).approve(tokenMessengerContract, data.amount);
         try ITokenMessengerV2(tokenMessengerContract)
             .depositForBurn(
@@ -699,6 +718,8 @@ contract Vault is
                     })
                 );
         }
+        /// @dev [AUDIT-FIX L-02] Clear the residual allowance in both the success and failure paths.
+        IERC20(burnToken).approve(tokenMessengerContract, 0);
     }
 
     function rebalanceMint(RebalanceTypes.RebalanceMintCCData calldata data) external override onlyCrossChainManager {

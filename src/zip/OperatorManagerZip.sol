@@ -89,6 +89,14 @@ contract OperatorManagerZip is
         symbolId2Hash[15] = 0xa2adc016e890b4fbbf161c7eaeb615b893e4fbeceae918fa7bf16cc40d46610b;
     }
 
+    /// @notice Decompression entry point inherited from `DecompressorExtension`.
+    /// @dev [AUDIT-FIX L-03] The inherited implementation `delegatecall`s into this very contract with
+    ///      caller-supplied calldata. It must never be reachable by third parties: restrict it to the
+    ///      operator, exactly like the `decode*` entry points.
+    function decompress(bytes calldata data) external payable override onlyOperator {
+        _delegatecall(decompressed(data));
+    }
+
     // empty function, for generate ABI for struct `PerpTypesZip.FuturesTradeUploadDataZip`
     function placeholder(PerpTypesZip.FuturesTradeUploadDataZip calldata zip) external {}
     function placeholder2(EventTypesZip.EventUpload calldata zip) external {}

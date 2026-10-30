@@ -27,6 +27,9 @@ interface IVault {
     error InvalidSwapSignature();
     error CeffuAddressMismatch(address want, address got);
     error SwapExpired(uint256 expirationTimestamp, uint256 currentTimestamp);
+    /// @dev [AUDIT-FIX L-01] raised when `withdraw2Contract` receives a vault type that this Vault
+    ///      cannot pay out (e.g. `VaultEnum.UserVault`), instead of silently doing nothing.
+    error UnsupportedVaultType(VaultTypes.VaultEnum vaultType);
 
     // @deprecated
     event AccountDeposit(

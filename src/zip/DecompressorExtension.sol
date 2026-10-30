@@ -86,8 +86,12 @@ abstract contract DecompressorExtension {
 
     /**
      * @dev Decompresses the compressed data (N bytes) passed to the function using the _delegatecall function.
+     * @dev [AUDIT-FIX L-03] This entry point performs a `delegatecall` to `address(this)` with calldata
+     *      fully controlled by the caller. It is `virtual` on purpose so that the inheriting contract
+     *      can (and must) restrict who is allowed to use it. Never leave it unrestricted in a contract
+     *      that exposes privileged functions or that holds funds.
      */
-    function decompress(bytes calldata data) external payable {
+    function decompress(bytes calldata data) external payable virtual {
         _delegatecall(decompressed(data));
     }
 

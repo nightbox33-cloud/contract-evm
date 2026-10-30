@@ -244,12 +244,17 @@ contract LedgerImplB is ILedgerImplB, OwnableUpgradeable, LedgerDataLayout {
     }
 
     // int128 + int128
+    /// @dev [AUDIT-FIX H-01] Values read from transient storage MUST be sign-extended when they are
+    ///      typed as int128. Solidity only guarantees that locals hold a properly sign-extended
+    ///      256-bit value; assigning to an `int128` from inline assembly performs no cleanup, so a
+    ///      negative value stored in the low 128 bits would be read back as `2**128 + x` (a huge
+    ///      positive number) and any multiplication/division/sign comparison afterwards is wrong.
     function _getTSSecondSlot(bytes32 keyBase) internal view returns (int128 v1, int128 v2) {
         bytes32 key = keyBase | bytes32(uint256(2));
         assembly {
             let tmp := tload(key)
-            v1 := shr(128, tmp)
-            v2 := and(tmp, MASK_ALL_F)
+            v1 := signextend(15, shr(128, tmp))
+            v2 := signextend(15, and(tmp, MASK_ALL_F))
         }
     }
 
@@ -258,7 +263,7 @@ contract LedgerImplB is ILedgerImplB, OwnableUpgradeable, LedgerDataLayout {
         bytes32 key = keyBase | bytes32(uint256(3));
         assembly {
             let tmp := tload(key)
-            v1 := shr(128, tmp)
+            v1 := signextend(15, shr(128, tmp))
             v2 := and(tmp, MASK_ALL_F)
         }
     }
@@ -269,7 +274,7 @@ contract LedgerImplB is ILedgerImplB, OwnableUpgradeable, LedgerDataLayout {
         assembly {
             let tmp := tload(key)
             v1 := shr(128, tmp)
-            v2 := and(tmp, MASK_ALL_F)
+            v2 := signextend(15, and(tmp, MASK_ALL_F))
         }
     }
 
@@ -304,12 +309,13 @@ contract LedgerImplB is ILedgerImplB, OwnableUpgradeable, LedgerDataLayout {
     // For Fee PerpPosition
 
     // bool + int128
+    /// @dev [AUDIT-FIX H-01] see `_getTSSecondSlot`: int128 reads need `signextend(15, …)`.
     function _getFeeTSFirstSlot(bytes32 keyBase) internal view returns (bool v1, int128 v2) {
         bytes32 key = keyBase | bytes32(uint256(1));
         assembly {
             let tmp := tload(key)
             v1 := shr(128, tmp)
-            v2 := and(tmp, MASK_ALL_F)
+            v2 := signextend(15, and(tmp, MASK_ALL_F))
         }
     }
 
@@ -318,8 +324,8 @@ contract LedgerImplB is ILedgerImplB, OwnableUpgradeable, LedgerDataLayout {
         bytes32 key = keyBase | bytes32(uint256(2));
         assembly {
             let tmp := tload(key)
-            v1 := shr(128, tmp)
-            v2 := and(tmp, MASK_ALL_F)
+            v1 := signextend(15, shr(128, tmp))
+            v2 := signextend(15, and(tmp, MASK_ALL_F))
         }
     }
 
