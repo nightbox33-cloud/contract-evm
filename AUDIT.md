@@ -13,19 +13,24 @@
 
 Se auditó línea por línea el 100 % de los contratos de `src/` (Ledger y sus 5 implementaciones por `delegatecall`, OperatorManager + impls, OperatorManagerZip/DecompressorExtension, Vault, VaultManager, FeeManager, MarketManager, librerías de firma y de matemática de posiciones, Ed25519/SHA‑512, layout de almacenamiento y patrón proxy/upgradeable).
 
-**Resultado:** el proyecto compila sin errores ni warnings relevantes (61 warnings de “parámetro sin usar”, todos en `Ledger.sol` y todos esperados por el patrón `delegatecall`). **No se encontró ninguna vulnerabilidad crítica explotable de forma permissionless por un tercero** en el superficie viva (depósito, vistas, `delegateSigner`). Los caminos que mueven dinero están protegidos por roles (`onlyOperatorManager`, `onlyCrossChainManager`, `onlyOwner`, `onlyLedger`, `onlyOperator`) y por firmas ECDSA/Ed25519 del motor y del usuario.
+**Resultado:** el proyecto compila sin errores ni warnings relevantes (61 warnings de “parámetro sin usar”, todos en `Ledger.sol` y todos esperados por el patrón `delegatecall`).
 
-Sin embargo, sí se identificaron:
+**Se encontró, y se demostró con bytecode en ejecución, una vulnerabilidad crítica (C‑02, sección 4.2).** `OperatorManagerImplB._processEventUpload` arma a mano la calldata que ejecuta el `Ledger` con `abi.encodePacked`, **descartando la palabra de cabecera ABI** del blob, mientras que la firma del motor se calcula sobre `abi.decode(blob, (T))`, que **sí** honra esa cabecera. Un mismo blob de bytes se decodifica como un evento benigno para el motor (y su firma valida) y como un evento arbitrario para el `Ledger` (y se ejecuta). La PoC ejecutada sobre EVM (sección 4.2.3) muestra el mismo blob firmado como un *settle* de **1 wei** y ejecutado como un *settle* de **1.000.000 USDC** a favor de una cuenta del atacante. Con eso, quien controla la clave `operator` —el componente caliente que transmite los lotes, precisamente el rol que la firma del motor debía impedir que pudiera fabricar eventos— puede acuñar saldo interno ilimitado, vaciar el fondo de seguros y retirar el USDC del `Vault` hasta agotarlo. Afecta a los **8 `bizType` dinámicos** (retiros, settlements, liquidaciones).
+
+En el resto de la superficie **no se encontró ningún vector de drenaje permissionless** (depósito, vistas, `delegateSigner`): los caminos que mueven dinero están protegidos por roles (`onlyOperatorManager`, `onlyCrossChainManager`, `onlyOwner`, `onlyLedger`, `onlyOperator`) y por firmas ECDSA/Ed25519 del motor y del usuario.
+
+Además se identificaron:
 
 * **1 bug real de alta severidad (corrupción silenciosa de contabilidad)** en `LedgerImplB` — el camino de *upload* de trades en lote con *transient storage*. Hoy está **inerte** (el `OperatorManager` no lo enruta), pero **se activaría y corrompería posiciones de inmediato** si alguien descomenta la línea indicada en el propio código. **Verificado a nivel de codegen del compilador y corregido en esta rama.**
 * **3 riesgos altos de modelo de confianza / centralización** (el `owner` de cada `Vault` puede vaciar el Vault completo de su cadena sin timelock ni límite on‑chain; el *swapOperator*/*swapSigner*; y el rol `SYMBOL_MANAGER_ROLE`).
 * **5 hallazgos medios** (fee de retiro no cubierta por la firma del usuario; allowance colgante en `withdraw2Contract`; pérdida de fondos en `withdraw` cuando el pago falla pero el mensaje cross‑chain ya se envió; `rebalanceMint` acreditando un importe no verificado; colisión del *ring buffer* de rebalanceos).
 * **7 hallazgos bajos / informativos** (replay entre `bizType` 1 y 7 por no cubrir `bizType` en la firma; `expirationTimestamp` fuera de la firma; `approve` residual en `rebalanceBurn`; `decompress()` público con `delegatecall` a sí mismo; `VaultEnum` no validado; sin *storage gap* en `Vault`; secreto de RPC en `.env.example`, etc.).
 
-**Se aplicaron y compilaron 5 parches** (marcados en el código con `[AUDIT-FIX …]`), todos quirúrgicos y sin cambios de comportamiento para los flujos válidos:
+**Se aplicaron y compilaron 6 parches** (marcados en el código con `[AUDIT-FIX …]`), todos quirúrgicos y sin cambios de comportamiento para los flujos válidos:
 
 | ID | Archivo | Parche |
 |----|---------|--------|
+| **C‑02** | `src/OperatorManagerImplB.sol` | **pin de la cabecera ABI (`== 0x20`) antes de re‑ensamblar la calldata: firma y ejecución decodifican el mismo struct** |
 | H‑01 | `src/LedgerImplB.sol` | `signextend` en todas las lecturas `int128` de *transient storage* |
 | M‑01 | `src/vaultSide/Vault.sol` | reset de allowance tras `depositFromStrategy` en `withdraw2Contract` |
 | L‑01 | `src/vaultSide/Vault.sol` + `IVault.sol` | `revert UnsupportedVaultType` para `vaultType` desconocido |
@@ -33,9 +38,9 @@ Sin embargo, sí se identificaron:
 | L‑03 | `src/zip/DecompressorExtension.sol` + `OperatorManagerZip.sol` | `decompress()` restringido a `onlyOperator` |
 | L‑04 | `src/vaultSide/Vault.sol` | `uint256[42] __gap` para upgrades seguros |
 
-> **“0 riesgos” no es alcanzable por auditoría.** Lo que sí se entrega es: superficie permissionless limpia, todos los hallazgos identificados con evidencia y mitigación, y los 6 bugs/latentes corregidos en código. El riesgo residual que **no se puede eliminar con código** es el de administración (sección 4.1), que requiere controles operativos (multisig + timelock + límites).
+> **“0 riesgos” no es alcanzable por auditoría.** Lo que sí se entrega es: superficie permissionless limpia, todos los hallazgos identificados con evidencia y mitigación, y los 7 bugs/latentes corregidos en código (incluido el crítico C‑02). El riesgo residual que **no se puede eliminar con código** es el de administración (sección 4.1), que requiere controles operativos (multisig + timelock + límites).
 
-**Limitación de verificación:** en este entorno no hay binario de Foundry disponible (la descarga de releases de GitHub está bloqueada) y los submódulos `lib/` no venían inicializados, por lo que **no se pudo ejecutar `forge test`**. Toda la verificación se hizo compilando el proyecto completo con `solc‑js 0.8.26` (0 errores) e inspeccionando el *assembly* generado. Se recomienda ejecutar `forge test` (y añadir los tests sugeridos en la sección 8) antes de desplegar los parches.
+**Limitación de verificación:** en este entorno no hay binario de Foundry disponible (la descarga de releases de GitHub está bloqueada) y los submódulos `lib/` no venían inicializados, por lo que **no se pudo ejecutar `forge test`**. La verificación se hizo (a) compilando el proyecto completo con `solc‑js 0.8.26` (0 errores), (b) inspeccionando el *assembly*/*storage layout* generados y (c) **ejecutando bytecode real en una EVM local (`py‑evm`/`eth‑tester`)** para la PoC de C‑02, que es la evidencia más fuerte del informe. Los tests de la sección 8 (incluido `test/security/CalldataMismatch.t.sol`) están escritos y **compilan**, pero deben ejecutarse con `forge test` en CI antes de desplegar.
 
 ---
 
@@ -45,7 +50,8 @@ Sin embargo, sí se identificaron:
 2. **Revisión manual línea por línea** de los 100 % de los archivos de `src/`, con foco en: rutas de movimiento de fondos (Vault, VaultManager), autenticación de llamadas (`msg.sender`, firmas), aritmética con `int128/uint128` (overflow/underflow/signo), `delegatecall`, patrones de upgrade (colisión de slots), replay y dominios de firma, y ensamblador en línea.
 3. **Compilación completa** con `solc 0.8.26` (cancun) y análisis de `warnings`, tamaños EIP‑170 y *assembly* generado.
 4. **Verificación empírica del bug H‑01** inspeccionando el *legacy assembly* emitido por el compilador para confirmar que Solidity **no** normaliza (`SIGNEXTEND`) un `int128` leído desde ensamblador (sección 5.1).
-5. **Modelado de atacante:** (a) externo permissionless, (b) operador/keeper comprometido, (c) motor (CEFI) comprometido, (d) `owner`/rol comprometido, (e) relayer cross‑chain comprometido.
+5. **Ejecución de PoC sobre EVM:** para C‑02 se replicaron los dos decodificadores exactos del repo, se compilaron con `solc 0.8.26` y se desplegaron en `py‑evm`/`eth‑tester` para demostrar la divergencia y validar el parche (antes/después).
+6. **Modelado de atacante:** (a) externo permissionless, (b) operador/keeper comprometido, (c) motor (CEFI) comprometido, (d) `owner`/rol comprometido, (e) relayer cross‑chain comprometido.
 
 ---
 
@@ -81,6 +87,8 @@ Sin embargo, sí se identificaron:
 
 Conclusión: **la única función permissionless que mueve valor es `deposit`/`depositTo`**, y su validación es sólida (no hay forma de acreditar a un `accountId` ajeno pagando desde otra dirección, ni de saltarse el límite de depósito, ni de reentrar en un flujo que incremente saldo).
 
+> **Matiz importante (C‑02):** «permissionless» no es la única dimensión. El hallazgo crítico de este informe **no** es permissionless —exige la clave `operator`— pero atraviesa el límite de confianza que la firma del motor define, que es el control de integridad del sistema. Una auditoría que solo mire la superficie permissionless lo deja pasar (y es lo que ocurrió en la primera pasada de esta misma revisión).
+
 ---
 
 ## 4. Hallazgos
@@ -92,6 +100,7 @@ Escala: **Crítico** = pérdida directa de fondos/permanente sin condiciones rar
 | ID | Severidad | Título | Estado |
 |----|-----------|--------|--------|
 | C‑01 | Crítico (centralización) | El `owner` del `Vault` puede vaciar el 100 % de los fondos de su cadena | Abierto — requiere control operativo |
+| **C‑02** | **Crítico** | **`_processEventUpload` ejecuta un evento distinto del que firma el motor (discrepancia calldata ↔ firma): 8 `bizType` dinámicos falsificables por el `operator`** | **Parcheado** + PoC ejecutada |
 | H‑01 | Alto | `LedgerImplB`: `int128` leído de *transient storage* sin extensión de signo → corrupción silenciosa de posiciones | **Parcheado** (latente, hoy inerte) |
 | H‑02 | Alto | `delegateSwap`: `swapSigner`/`swapOperator` convierten al Vault en un *proxy* de llamadas arbitrarias | Abierto — diseño |
 | H‑03 | Alto | `setAllowedSymbolByOperator` puede ser invocado por cualquier `SYMBOL_MANAGER_ROLE` sin firma CEFI | Abierto — revisar política de roles |
@@ -113,7 +122,7 @@ Escala: **Crítico** = pérdida directa de fondos/permanente sin condiciones rar
 | I‑04 | Info | Credenciales/endpoints en `.env.example` (clave Infura + token de RPC) | Abierto |
 | I‑05 | Info | `Ed25519.verify` no rechaza claves de orden pequeño/torsión | Abierto |
 | I‑06 | Info | `Ledger`: funciones de lectura no son `view` (no se pueden usar en contexto `view`) | Abierto |
-| I‑07 | Info | `_processEventUpload` construye calldata con `abi.encodePacked` y offsets calculados a mano | Abierto |
+| I‑07 | Info | `_processEventUpload` construye calldata con `abi.encodePacked` y offsets calculados a mano | **Re‑graduado → C‑02, parcheado** |
 
 ---
 
@@ -141,7 +150,133 @@ Adicionalmente, el `owner` del `Ledger` puede `setLedgerImplA…View` (código a
 
 ---
 
-### 4.2 H‑01 — `LedgerImplB`: `int128` sin extensión de signo al leer *transient storage*
+### 4.2 C‑02 — `_processEventUpload` ejecuta un evento **distinto** del que firma el motor (discrepancia calldata ↔ firma) — **CRÍTICO** *(nuevo, verificado con bytecode)*
+
+**Archivos:** `src/OperatorManagerImplB.sol:44‑73` · `src/library/Signature.sol:414‑520` (`eventsUploadEncodeHash`) · `src/LedgerImplA.sol:237` (`executeSettlement`) · `src/LedgerImplA.sol` (`executeWithdrawAction`)
+
+**Estado:** **parcheado** en esta rama (`[AUDIT-FIX C-02]`, `src/OperatorManagerImplB.sol`), verificado con la PoC de C.2.3. El endurecimiento de esquema recomendado en C.2.5 (firmar los bytes crudos) sí requiere coordinación con CEFI y queda como recomendación.
+
+#### C.2.1 Causa raíz: dos decodificadores ABI distintos sobre los mismos bytes
+
+La firma del motor **no** cubre el blob de bytes: cubre los **campos ya decodificados** de cada evento. En `Signature.eventsUploadEncodeHash`:
+
+```solidity
+} else if (eventUploadData.bizType == uint8(BizType.Settlement)) {
+    EventTypes.Settlement memory settlement = abi.decode(eventUploadData.data, (EventTypes.Settlement));
+    SettlementSignature memory settlementSignature = SettlementSignature({ /* campos del struct */ });
+```
+
+`abi.decode` de un tipo **dinámico** honra la primera palabra (la cabecera ABI = *offset* donde empieza el struct). Por tanto el hash del motor depende de **dónde apunta** esa palabra.
+
+En cambio, la ejecución (`OperatorManagerImplB._processEventUpload`) **descarta** esa palabra y pega la cola tal cual:
+
+```solidity
+uint256 dataOffset = 0;
+if (_isDynamicBizType(data.bizType)) { dataOffset = 32; }
+
+require(data.data.length >= dataOffset, "Data too short");
+bytes memory dataWithoutOffset = abi.encodePacked(data.data[dataOffset:]);
+uint256 eventOffset = 64;   // 0x40 for eventOffset + eventId
+bytes memory encodedCalldata = dataOffset == 0
+    ? abi.encodePacked(selector, dataWithoutOffset, abi.encode(data.eventId))
+    : abi.encodePacked(selector, abi.encode(eventOffset), abi.encode(data.eventId), dataWithoutOffset);
+(bool success, bytes memory returnData) = address(ledger).call(encodedCalldata);
+```
+
+La calldata que llega al `Ledger` es `selector ‖ 0x40 ‖ eventId ‖ data.data[32:]`; el decoder del `Ledger` recalcula los offsets internos del struct tomando como base `data.data[32:]`, **no** `data.data[offset_declarado]`.
+
+Consecuencia: la firma se calcula sobre `abi.decode(blob, (T))` y la ejecución sobre `abi.decode(blob[32:], (T))`. Solo coinciden si la cabecera vale exactamente `0x20`. **Un mismo blob puede significar dos cosas distintas.**
+
+#### C.2.2 Payload de ataque
+
+Sea `S` el evento benigno que el motor firmó y `E` el evento que el atacante quiere ejecutar. Con
+
+```
+blob = uint256(32 + |E_body|) ‖ E_body ‖ S_body        (E_body/S_body = abi.encode(X)[32:])
+```
+
+* el motor hace `abi.decode(blob, (T))` → lee el offset `32+|E_body|` → decodifica **`S`** (benigno) ⇒ **la firma valida**;
+* el `Ledger` recibe `blob[32:]` = `E_body ‖ S_body` → decodifica **`E`** (del atacante) ⇒ **lo ejecuta**.
+
+`|E_body|` es libre, así que el atacante elige la cabecera a voluntad. Afecta a **los 8 `bizType` dinámicos**: `1 Withdraw`, `2 Settlement`, `4 Liquidation`, `7 DelegateWithdraw`, `9 LiquidationV2`, `10 WithdrawSol`, `15 SettlementV3`, `17 LiquidationV3` (los que `_isDynamicBizType` marca con `dataOffset = 32`). Los estáticos no divergen (ambos decodificadores leen desde la posición 0), salvo por el desplazamiento del `eventId` descrito en C.2.6.
+
+#### C.2.3 Prueba de concepto **ejecutada** (bytecode real en EVM)
+
+Se replicaron los dos decodificadores exactamente como están en el repo (`signedView` = `abi.decode(blob,(T))`, `executedView` = el `abi.encodePacked` de `_processEventUpload`) y se desplegó en una EVM local (`py-evm`/`eth-tester`, solc 0.8.26):
+
+```solidity
+function signedView(bytes calldata blob) external pure returns (bytes32, int128) {
+    Settlement memory s = abi.decode(blob, (Settlement));      // lo que firma el motor
+    return (s.accountId, s.settledAmount);
+}
+function executedView(bytes calldata blob, uint64 eventId) external returns (bytes32, int128) {
+    bytes memory cd = abi.encodePacked(
+        LedgerStub.executeSettlement.selector,
+        abi.encode(uint256(64)), abi.encode(eventId), blob[32:]  // lo que ejecuta el Ledger
+    );
+    (bool ok, bytes memory ret) = ledger.call(cd);
+    require(ok, "ledger call failed");
+    return abi.decode(ret, (bytes32, int128));
+}
+```
+
+Payload generado: `S` = liquidación benigna de **1** unidad; `E` = `accountId = 0x9999…99`, `settledAmount = 1.000.000 USDC` (1e12 con 6 decimales). Salida real:
+
+```
+blob  : 800 bytes, head offset X = 416
+
+  what the ENGINE signs / verifies      -> accountId 1111111111111111  settledAmount 1
+  what the LEDGER executes (pre-fix)    -> accountId 9999999999999999  settledAmount 1000000000000
+  SAME BLOB, DIFFERENT MEANING: True
+
+  POST-FIX: malicious blob REJECTED     -> NonCanonicalDataOffset
+  POST-FIX: canonical blob still works  -> 1111111111111111  1
+```
+
+El mismo `bytes` que el motor firma como un *settle* de 1 wei se ejecuta como un *settle* de 1.000.000 USDC a favor de una cuenta arbitraria. **No es una hipótesis de lectura de código: es bytecode ejecutado.**
+
+#### C.2.4 Impacto: qué puede hacer quien tenga la clave del `operator`
+
+`eventUpload` es `onlyOperator`, así que el atacante debe ser el operador (o quien reciba de CEFI el lote ya firmado para transmitirlo). Ese es exactamente el rol que la firma del motor debía **no** poder fabricar eventos: es la barrera de integridad del sistema. Con C‑02, esa barrera desaparece y el operador puede, sobre el **mismo lote firmado** que está transmitiendo:
+
+1. **Acuñar saldo interno sin límite** — `bizType 2` (`executeSettlement`): `account.balances[asset] += settlementExecutions[i].settledAmount` para cada entrada, sin tope y **sin comprobar que el saldo quede ≥ 0** (la comprobación está comentada en `LedgerImplA.sol:273‑275`). La única validación es `totalSettleAmount == settlement.settledAmount`, y **ambos** los pone el atacante. Con `insuranceTransferAmount != 0` la misma llamada debita el **fondo de seguros** (`insuranceFund.subBalance`) y lo acredita a la cuenta del atacante.
+2. **Retirar los USDC del `Vault` hasta agotarlo** — `bizType 1` (`executeWithdrawAction`): el struct ejecutado es un retiro de la cuenta del atacante (`accountId`, `sender`, `receiver`, `tokenAmount`, `withdrawNonce`), y `r,s,v` —que la firma del motor **no** cubre, porque los firma el usuario— los aporta el propio atacante, que es dueño de la cuenta. `vaultManager.getBalance` acota el pago al saldo real del Vault, es decir, el atacante extrae **todo el USDC de esa cadena**.
+3. **Robar saldo de cualquier cuenta** — `bizType 4/9/17` (`executeLiquidation*`): mueve saldo desde la cuenta «liquidada» (elegida por el atacante) al fondo de seguros o a la cuenta que indique.
+
+En otras palabras: **la firma del motor deja de ser un control de integridad para todos los eventos dinámicos.** Un operador comprometido (clave caliente, en línea, en cloud, rotada con frecuencia) pasa de «puede transmitir lo que el motor firmó» a «puede fabricar cualquier settle/retiro»: drenaje total del `Vault` y del fondo de seguros de cada cadena.
+
+**Honestidad sobre la precondición:** C‑02 **no** es permissionless — requiere la clave `operator` (o control del componente que transmite el lote). Se clasifica **Crítico** igualmente porque (a) es el control de seguridad central del sistema el que se rompe, (b) el compromiso de una clave caliente de operador es un escenario de modelado obligatorio —y precisamente para eso existe la firma del motor— y (c) el impacto es pérdida total de fondos de todos los usuarios de la cadena, no degradación parcial.
+
+#### C.2.5 Corrección aplicada (verificada)
+
+Fijar la cabecera al valor canónico para los tipos dinámicos hace que ambos decodificadores lean el struct en la misma posición (misma base, misma longitud disponible: `blob.length‑32` en la firma vs. `calldatasize‑68 = L‑32` en la ejecución):
+
+```solidity
+// src/OperatorManagerImplB.sol — [AUDIT-FIX C-02]
+require(data.data.length >= dataOffset, "Data too short");
+if (dataOffset != 0) {
+    require(abi.decode(data.data[:32], (uint256)) == 32, "NonCanonicalDataOffset");
+}
+```
+
+* No cambia el esquema de firma ⇒ **no requiere cambios en CEFI** (el motor ya emite `abi.encode(struct)`, cuya cabecera es `0x20`).
+* Coste: 3 líneas, +141 bytes de bytecode (`OperatorManagerImplB` 24.312 → **24.453**, quedan **123 bytes** de margen EIP‑170 con `runs=200`).
+* Verificado en la PoC: el blob malicioso revierte con `NonCanonicalDataOffset` y el blob canónico sigue ejecutándose igual.
+* Cubre también la ruta `zip`: `OperatorManagerZip` re‑codifica cada evento con `abi.encode(...)` (canónico) antes de llamar a `eventUpload`, así que no era explotable por esa vía, pero la comprobación es defensa en profundidad.
+* **Recomendación a futuro (cambio de esquema, requiere CEFI):** añadir `keccak256(eventUploadData.data)` (o directamente el blob) al mensaje firmado — la firma debe cubrir *los bytes que se ejecutan*, no una reinterpretación de ellos.
+
+#### C.2.6 Endurecimiento adicional (bajo): desplazamiento del `eventId` en tipos estáticos
+
+Para los tipos estáticos la calldata es `selector ‖ data.data ‖ eventId`. Si el blob es más largo que el struct, el `eventId` se lee de una posición desplazada: el atacante puede elegir el `eventId` que se guarda en `account.lastEngineEventId`, aunque el resto del struct no cambia. Impacto bajo (marcador de orden/reconciliación), pero se corrige gratis exigiendo la longitud exacta por `bizType` en el mismo `if`.
+
+#### C.2.7 Test de regresión
+
+`test/security/CalldataMismatch.t.sol` (nuevo): demuestra (1) que ambos decodificadores divergen sobre el mismo blob, (2) que **la firma del motor valida sobre el payload forjado** (se firma con `vm.sign` replicando `eventsUploadEncodeHash`), (3) que con el parche revierte con `NonCanonicalDataOffset` y (4) que el payload canónico sigue ejecutándose. Compila con solc 0.8.26 + forge‑std v1.5.0 (0 errores).
+
+---
+
+
+### 4.3 H‑01 — `LedgerImplB`: `int128` sin extensión de signo al leer *transient storage*
 
 **Severidad:** Alto (Crítico si se habilita el *batch upload*)
 **Ubicación:** `src/LedgerImplB.sol:247‑280` (`_getTSSecondSlot`, `_getTSThirdSlot`, `_getTSFourthSlot`, `_getFeeTSFirstSlot`, `_getFeeTSSecondSlot`), consumido en `_executeProcessValidatedFutures` (`:74‑110`) y `_chargeFundingFee` (`:364`), expuesto por `Ledger.executeProcessValidatedFuturesBatch` (`src/Ledger.sol:367`).
@@ -193,7 +328,7 @@ Recomendación adicional: mientras no exista ese test, **eliminar** `executeProc
 
 ---
 
-### 4.3 H‑02 — `delegateSwap` da al binomio `swapOperator`/`swapSigner` control total de llamadas desde el Vault
+### 4.4 H‑02 — `delegateSwap` da al binomio `swapOperator`/`swapSigner` control total de llamadas desde el Vault
 
 **Severidad:** Alto
 **Ubicación:** `src/vaultSide/Vault.sol:818‑870`, `src/library/DelegateSwapSignature.sol:10‑29`
@@ -223,7 +358,7 @@ y migrar a EIP‑712 con `domainSeparator {name: "OrderlyVault", version: "1", c
 
 ---
 
-### 4.4 H‑03 — `setAllowedSymbolByOperator` no exige firma CEFI si el llamante tiene el rol
+### 4.5 H‑03 — `setAllowedSymbolByOperator` no exige firma CEFI si el llamante tiene el rol
 
 **Severidad:** Alto (según política de roles)
 **Ubicación:** `src/VaultManager.sol:189‑204`, `src/OperatorManager.sol:246‑281`
@@ -236,7 +371,7 @@ y migrar a EIP‑712 con `domainSeparator {name: "OrderlyVault", version: "1", c
 
 ---
 
-### 4.5 M‑01 — Allowance colgante en `withdraw2Contract` (parcheado)
+### 4.6 M‑01 — Allowance colgante en `withdraw2Contract` (parcheado)
 
 **Severidad:** Medio
 **Ubicación:** `src/vaultSide/Vault.sol:563‑568` (original)
@@ -256,7 +391,7 @@ IProtocolVault(data.receiver).depositFromStrategy(data.clientId, data.brokerHash
 
 ---
 
-### 4.6 M‑02 — La `fee` del retiro no está firmada por el usuario y el tope por defecto es “ilimitado”
+### 4.7 M‑02 — La `fee` del retiro no está firmada por el usuario y el tope por defecto es “ilimitado”
 
 **Severidad:** Medio
 **Ubicación:** `src/library/Signature.sol:53‑77` (`verifyWithdraw`), `:101‑124` (`verifyDelegateWithdraw`), `src/LedgerImplA.sol:103‑190`, `src/VaultManager.sol:31` (`maxWithdrawFee`, “default = unlimited”)
@@ -277,7 +412,7 @@ Withdraw(string brokerId, uint256 chainId, address receiver, string token,
 
 ---
 
-### 4.7 M‑03 — `Vault.withdraw`: el mensaje cross‑chain se envía antes de pagar; si el pago falla, el usuario pierde el saldo
+### 4.8 M‑03 — `Vault.withdraw`: el mensaje cross‑chain se envía antes de pagar; si el pago falla, el usuario pierde el saldo
 
 **Severidad:** Medio
 **Ubicación:** `src/vaultSide/Vault.sol:479‑520` (original)
@@ -303,7 +438,7 @@ if (data.tokenHash == nativeTokenHash) {
 
 ---
 
-### 4.8 M‑04 — `rebalanceMint`: en el `catch` se acredita `data.amount` sin verificar lo acuñado
+### 4.9 M‑04 — `rebalanceMint`: en el `catch` se acredita `data.amount` sin verificar lo acuñado
 
 **Severidad:** Medio
 **Ubicación:** `src/vaultSide/Vault.sol:690‑740` (original)
@@ -316,7 +451,7 @@ En el camino de éxito se mide el delta real (`balanceAfterMint - balanceBeforeM
 
 ---
 
-### 4.9 M‑05 — `VaultManager`: el *ring buffer* de 100 rebalanceos puede sobrescribir un estado `Pending`
+### 4.10 M‑05 — `VaultManager`: el *ring buffer* de 100 rebalanceos puede sobrescribir un estado `Pending`
 
 **Severidad:** Medio
 **Ubicación:** `src/VaultManager.sol:44` (`MAX_REBALACE_SLOT = 100`), `:262`, `:271`, `:293`, `:310`
@@ -330,7 +465,7 @@ En el camino de éxito se mide el delta real (`balanceAfterMint - balanceBeforeM
 
 ---
 
-### 4.10 L‑01 — `withdraw2Contract` no revierte para `vaultType` no soportado (parcheado)
+### 4.11 L‑01 — `withdraw2Contract` no revierte para `vaultType` no soportado (parcheado)
 
 **Severidad:** Bajo
 **Ubicación:** `src/vaultSide/Vault.sol:563‑570` (original)
@@ -340,7 +475,7 @@ El `if / else if` no tenía rama `else`. Con `vaultType == VaultTypes.VaultEnum.
 
 ---
 
-### 4.11 L‑02 — `rebalanceBurn` deja allowance residual (parcheado)
+### 4.12 L‑02 — `rebalanceBurn` deja allowance residual (parcheado)
 
 **Severidad:** Bajo
 **Ubicación:** `src/vaultSide/Vault.sol:663` (original)
@@ -351,7 +486,7 @@ El `if / else if` no tenía rama `else`. Con `vaultType == VaultTypes.VaultEnum.
 
 ---
 
-### 4.12 L‑03 — `DecompressorExtension.decompress()` público ejecuta `delegatecall` a sí mismo (parcheado)
+### 4.13 L‑03 — `DecompressorExtension.decompress()` público ejecuta `delegatecall` a sí mismo (parcheado)
 
 **Severidad:** Bajo
 **Ubicación:** `src/zip/DecompressorExtension.sol:90`, heredado por `OperatorManagerZip`
@@ -369,7 +504,7 @@ Cualquiera puede descomprimir bytes arbitrarios y forzar un `delegatecall` al pr
 
 ---
 
-### 4.13 L‑04 — `Vault` sin *storage gap* (parcheado)
+### 4.14 L‑04 — `Vault` sin *storage gap* (parcheado)
 
 **Severidad:** Bajo
 **Ubicación:** `src/vaultSide/Vault.sol` (declaración de estado)
@@ -380,12 +515,14 @@ Cualquiera puede descomprimir bytes arbitrarios y forzar un `delegatecall` al pr
 
 ---
 
-### 4.14 L‑05 — `bizType` no forma parte del mensaje firmado
+### 4.15 L‑05 — `bizType` no forma parte del mensaje firmado
 
 **Severidad:** Bajo
 **Ubicación:** `src/library/Signature.sol:414‑470` (`eventsUploadEncodeHash`), `src/OperatorManagerImplB.sol:44‑77`
 
 `eventsUploadEncodeHash` clasifica cada evento por `bizType` y lo decodifica en una estructura tipada; el `bizType` en sí **no** se incluye en el payload firmado. `bizType == 1` (Withdraw → `executeWithdrawAction`, verifica firma ECDSA del usuario) y `bizType == 7` (DelegateWithdraw → `executeDelegateWithdrawAction`, verifica la firma del *delegate signer*) producen **exactamente el mismo** `WithdrawDataSignature` y caen en el mismo array. Por tanto una carga firmada para `bizType 1` puede reenviarse como `bizType 7` (y viceversa) y ejecutar la otra ruta.
+
+> **Nota de re‑graduación:** este hallazgo es el caso *menor* del mismo defecto de fondo que C‑02 —la firma cubre una **reinterpretación** del blob y no los bytes que se ejecutan—. El parche de C‑02 no lo cierra: sigue siendo recomendable incluir `bizType` (y `keccak256(data.data)`) en el mensaje firmado.
 
 **Impacto.** Requiere que el atacante controle el *relayer*/*operator* que envía el `eventUpload` (o que intercepte la carga antes de su inclusión). El daño se limita a que la ruta alternativa aplica sus propias comprobaciones (la mayoría terminan en `state != 0` ⇒ evento de fallo sin mover fondos), pero rompe la garantía de que un evento firmado para una operación se ejecute como esa operación.
 
@@ -393,7 +530,7 @@ Cualquiera puede descomprimir bytes arbitrarios y forzar un `delegatecall` al pr
 
 ---
 
-### 4.15 L‑06 — `delegateSwapWithExpiration`: la expiración la elige el llamante
+### 4.16 L‑06 — `delegateSwapWithExpiration`: la expiración la elige el llamante
 
 **Severidad:** Bajo
 **Ubicación:** `src/vaultSide/Vault.sol:829‑837`
@@ -408,7 +545,7 @@ function delegateSwapWithExpiration(VaultTypes.DelegateSwap calldata data, uint2
 
 ---
 
-### 4.16 L‑07 — Listado permissionless: secuencia estricta y no‑ops que revierten
+### 4.17 L‑07 — Listado permissionless: secuencia estricta y no‑ops que revierten
 
 **Severidad:** Bajo
 **Ubicación:** `src/OperatorManager.sol:246‑281`, `src/VaultManager.sol:189‑204`
@@ -420,11 +557,11 @@ function delegateSwapWithExpiration(VaultTypes.DelegateSwap calldata data, uint2
 
 ---
 
-### 4.17 Informativos
+### 4.18 Informativos
 
 * **I‑01 `SwapSignature.sol` es código muerto e inconsistente.** No se usa en ningún sitio (verificado con `grep`). Su `DELEGATE_SWAP_TYPEHASH` declara `uint256 swapNonce` pero codifica `data.tradeId`. Si alguien lo conectara por error, el digest no sería interoperable. **Eliminarlo** o corregirlo.
 * **I‑02 Firmas EIP‑191.** Los *uploads* del motor y las firmas de swap usan `toEthSignedMessageHash` (prefijo `"\x19Ethereum Signed Message"`) en vez de EIP‑712. Funciona, pero impide que el firmante vea campos estructurados en su *wallet* (riesgo de *phishing* de firmas) y no incluye `chainId`/`verifyingContract` en el caso de `perpUpload`/`eventsUpload` (protección sólo por `batchId` monotónico).
-* **I‑03 Margen EIP‑170.** Con la configuración oficial (`runs = 200`): `OperatorManagerImplB` = **24.312 bytes** (límite 24.576 ⇒ **264 bytes de margen**), `LedgerImplA` = 23.449, `LedgerImplC` = 23.176, `Vault` = 21.841 (`runs=1000`: 24.579 / 24.367 / 24.123 / 23.652, y `OperatorManagerImplB` **excede** el límite). Cualquier añadido a `OperatorManagerImplB` puede hacerlo no desplegable. Verificar el `runs` usado en el despliegue real.
+* **I‑03 Margen EIP‑170.** Con la configuración oficial (`runs = 200`): `OperatorManagerImplB` = **24.453 bytes** tras el parche de C‑02 (límite 24.576 ⇒ **123 bytes de margen**), `LedgerImplA` = 23.449, `LedgerImplC` = 23.176, `Vault` = 21.841 (`runs=1000`: 24.727 / 24.367 / 24.123 / 23.652; `OperatorManagerImplB` **excede** el límite en esa configuración, como ya lo hacía antes del parche con 24.579). Cualquier añadido a `OperatorManagerImplB` puede hacerlo no desplegable. Verificar el `runs` usado en el despliegue real.
 * **I‑04 Credenciales en `.env.example`.** Contiene una API key de Infura (`eda7ae04091a465eb960308cb44bf0b3`) y un endpoint privado de Orderly con token en la ruta (`…/fVgSf4ruGhwvEMd8z6dRwsH6XgRaq31wxN4tRhZPN6rWYhjVt/rpc`). Son de testnet, pero deben rotarse/eliminarse: el repo es público.
 * **I‑05 `Ed25519.verify` no rechaza claves de orden pequeño.** La verificación comprueba `s < L` y descomprime `k`, pero no rechaza puntos de torsión/identidad como clave pública. En este sistema el `pubkey` de Solana se fija al crear la cuenta (`accountId == keccak(pubkey, brokerHash)`) y la ruta (`executeWithdrawSolAction`) es `onlyOperatorManager`, por lo que **no es explotable**, pero conviene añadir la comprobación (evita “cualquier firma válida” para claves degeneradas).
 * **I‑06 Funciones de lectura no `view` en `Ledger`.** `getFrozenWithdrawNonce`, `batchGetUserLedger`, `batchGetUserBalance`, `getUserTotalFrozenBalance`, `getUserEscrowBalance`, `getBalanceTransferState` no son `view` (hacen `delegatecall`), por lo que no pueden invocarse desde otro contrato en contexto `view` ni desde `eth_call` de forma garantizada por herramientas estrictas. Recomendación: `staticcall` + `view`.
@@ -462,6 +599,7 @@ function delegateSwapWithExpiration(VaultTypes.DelegateSwap calldata data, uint2
 * `withdrawNonce` + `lastWithdrawNonce` ⇒ sin replay dentro de la cuenta.
 * `permissionlessListing` ata `symbolHash`, `allowed`, `sequenceId` y `chainId`, y comprueba `_chainId == block.chainid`.
 * `verifyWithdrawSol` acepta dos codificaciones (mensaje directo o transacción *wrapped* de Solana); `Ed25519` verifica `s < L` y la ecuación del grupo.
+* **Pero** la firma del motor del `eventUpload` **no** cubre el blob ejecutado sino su decodificación: ver C‑02 (crítico). Es el único punto donde el principio “firmar exactamente lo que se ejecuta” se rompe, y era suficiente para anular todo el modelo.
 
 ### 5.5 Superficie de depósito (la única permissionless con valor)
 * `accountId` se valida contra `keccak(receiver, brokerHash)` (o `keccak(vault, sender, brokerHash)` solo si `msg.sender == vaultAdapter`) ⇒ no se puede acreditar a una cuenta ajena.
@@ -483,10 +621,12 @@ src/vaultSide/Vault.sol             | allowance reset en withdraw2Contract      
 src/interface/IVault.sol            | nuevo error UnsupportedVaultType                       [L-01]
 src/zip/DecompressorExtension.sol   | decompress() → virtual                                 [L-03]
 src/zip/OperatorManagerZip.sol      | override decompress() con onlyOperator                 [L-03]
+src/OperatorManagerImplB.sol        | pin de la cabecera ABI (== 0x20) en _processEventUpload [C-02]
+test/security/CalldataMismatch.t.sol| test de regresión de C-02 (nuevo, 4 casos)              [C-02]
 ```
 
 **Verificación:** compilación completa de `src/` con `solc 0.8.26` (`evmVersion: cancun`), `runs = 1000` y `runs = 200` ⇒ **0 errores**. Tamaños con `runs = 200` (configuración oficial): antes → después
-`Vault` 21.475 → **21.841** (+366), `OperatorManagerZip` 12.471 → **12.516** (+45), `LedgerImplB` 6.319 (sin cambio), `OperatorManagerImplB` 24.312 (sin cambio). Todos por debajo de 24.576.
+`Vault` 21.475 → **21.841** (+366), `OperatorManagerZip` 12.471 → **12.516** (+45), `LedgerImplB` 6.319 (sin cambio), `OperatorManagerImplB` 24.312 → **24.453** (+141 por el parche de C‑02). Todos por debajo de 24.576, pero **`OperatorManagerImplB` queda con solo 123 bytes de margen**: ver I‑03.
 
 **No se modificó** nada relacionado con: formatos de firma, orden de las llamadas cross‑chain, `maxWithdrawFee`, `bizType`, `rebalanceMint`, el *ring buffer* de rebalanceos ni los roles; todos esos cambios exigen coordinación off‑chain y se documentan como recomendación.
 
@@ -498,9 +638,11 @@ src/zip/OperatorManagerZip.sol      | override decompress() con onlyOperator    
 2. **Timelock:** `ProxyAdmin.owner()` y `owner()` de `Vault`/`Ledger` con retardo ≥ 48 h para upgrades y cambios de `crossChainManager`.
 3. **`maxWithdrawFee`:** fijar un tope explícito por token en cada cadena (hoy `0` = ilimitado).
 4. **`OperatorManager.setOperatorManagerZipAddress`:** si no se usa el `zip`, dejarlo en `address(0)`; si se usa, el contrato `OperatorManagerZip` debe tener su `zipOperatorAddress` dedicado.
-5. **No habilitar** `executeProcessValidatedFuturesBatch` hasta que exista el test diferencial de la sección 4.2.
+5. **No habilitar** `executeProcessValidatedFuturesBatch` hasta que exista el test diferencial de la sección 4.3.
 6. **Monitorización on‑chain:** alertas sobre `ChangeCrossChainManager`, `ChangeOperator`, `ChangeLedgerImpl*`, `PrimeWalletSet`, `VaultSet`, `SetAllowedSymbol`, `WithdrawFailed`, `CalAverageEntryPriceSkipped` y `RebalanceBurnResult`.
 7. **`forge test`** completo (con `--profile ci`, `fuzz_runs = 100_000`) sobre esta rama antes de cualquier despliegue; el entorno de auditoría no disponía de Foundry.
+8. **Clave `operator` (C‑02):** el parche la deja sin capacidad de fabricar eventos, pero el rol sigue siendo caliente y con capacidad de *griefing*. Custodiarla en HSM/KMS, rotación periódica, y **verificar on‑chain** que `operatorAddress` es una EOA dedicada. Añadir un *watchdog* que compare el `EventUpload` emitido off‑chain con el ejecutado on‑chain (`eventId`, `bizType`, hash del blob).
+9. **Cabecera ABI canónica (C‑02):** el motor ya emite `abi.encode(struct)` (cabecera `0x20`); confirmar en la integración que CEFI **nunca** genera los blobs con otro formato. Si lo hiciera, el parche los rechazaría con `NonCanonicalDataOffset` (fail‑closed, no fail‑open).
 
 ---
 
@@ -508,6 +650,7 @@ src/zip/OperatorManagerZip.sol      | override decompress() con onlyOperator    
 
 | Hallazgo | Test |
 |---|---|
+| **C‑02** | **`test/security/CalldataMismatch.t.sol` (ya escrito):** (1) divergencia de decodificadores sobre el mismo blob, (2) la firma del motor valida sobre el payload forjado, (3) el parche revierte con `NonCanonicalDataOffset`, (4) el payload canónico sigue ejecutándose. Añadir un *fuzz* que genere blobs con cabeceras arbitrarias y exija `revert` salvo cabecera `0x20`. |
 | H‑01 | Diferencial `executeProcessValidatedFuturesBatch` vs. N × `executeProcessValidatedFutures` con posiciones cortas, `costPosition`/`openingCost` negativos y *funding* negativo (fuzz). |
 | M‑01 | `withdraw2Contract` con un `ProtocolVault` que consume solo la mitad (`assert token.allowance(vault, receiver) == 0`). |
 | M‑02 | Fuzz: `fee <= tokenAmount-1` con `maxWithdrawFee == 0` ⇒ documentar/limitar. |
@@ -521,13 +664,16 @@ src/zip/OperatorManagerZip.sol      | override decompress() con onlyOperator    
 
 ## 9. Conclusión
 
-El código está **bien estructurado para un sistema de este tamaño**: separación de responsabilidades por `delegatecall` (con layouts de almacenamiento consistentes), doble verificación (rol + firma criptográfica) en todas las rutas que mueven valor, aritmética con *checked math* y librerías de casteo seguro, y snapshots de estado (`escrowBalances`) para las transferencias internas asíncronas.
+El código está **bien estructurado para un sistema de este tamaño**: separación de responsabilidades por `delegatecall` (con layouts de almacenamiento consistentes), doble verificación (rol + firma criptográfica) en las rutas que mueven valor, aritmética con *checked math* y librerías de casteo seguro, y snapshots de estado (`escrowBalances`) para las transferencias internas asíncronas.
 
-**No se encontró un vector de drenaje permissionless.** Los riesgos reales, en orden de impacto, son:
+**Pero sí existe una vulnerabilidad crítica (C‑02)**, y no es una hipótesis: es una divergencia entre lo que el motor firma y lo que la cadena ejecuta, demostrada con bytecode real en una PoC ejecutada. El sistema tiene una propiedad implícita —«la firma del motor autoriza exactamente el evento que se ejecuta»— que **no se cumple**: `Signature.eventsUploadEncodeHash` decodifica con `abi.decode` (honrando la cabecera ABI) y `_processEventUpload` re‑ensambla la calldata descartándola. Un blob de 800 bytes es, a la vez, un settle de 1 wei (para el firmante) y un settle de 1.000.000 USDC (para el `Ledger`). Afecta a los 8 `bizType` dinámicos y, con la clave `operator`, permite acuñar saldo, vaciar el seguro y drenar el `Vault`.
 
-1. **Centralización (C‑01):** una sola clave `owner` puede vaciar el `Vault` de su cadena. Es el riesgo número uno y no se resuelve con código en este repo: requiere multisig + timelock + límites. **“0 riesgos” no es una afirmación honesta mientras esto no se mitigue operativamente.**
-2. **Camino latente roto (H‑01):** corregido y verificado; no debe habilitarse el *batch upload* sin el test diferencial.
-3. **Confianza en el motor/operador (M‑02, L‑05):** la firma del usuario no cubre la comisión y el `bizType` no está autenticado; ambos requieren cambios coordinados con CEFI.
-4. **Manejo de fallos de pago (M‑03, L‑01) y de rebalanceo (M‑04, M‑05):** degradan la contabilidad en escenarios concretos; todos tienen mitigación clara y acotada.
+Riesgos reales, en orden de impacto:
 
-Los parches aplicados (`[AUDIT-FIX …]`) son quirúrgicos, compilan y no cambian la semántica de los flujos válidos.
+1. **C‑02 (crítico, parcheado aquí):** rompe el control de integridad central. Sin el parche, un operador comprometido drena la cadena. Con el parche, firma y ejecución decodifican el mismo struct. **Pendiente:** ejecutar el test de regresión en CI y, a medio plazo, cambiar el esquema para firmar `keccak256(data.data)` (los bytes crudos), que es la única forma de que el defecto no pueda reaparecer con un cambio de codificación.
+2. **Centralización (C‑01):** una sola clave `owner` puede vaciar el `Vault` de su cadena. No se resuelve con código en este repo: requiere multisig + timelock + límites. **“0 riesgos” no es una afirmación honesta mientras esto no se mitigue operativamente.**
+3. **Camino latente roto (H‑01):** corregido y verificado; no debe habilitarse el *batch upload* sin el test diferencial.
+4. **Confianza en el motor/usuario (M‑02, L‑05):** la firma del usuario no cubre la comisión y el `bizType` no está autenticado; requieren cambios coordinados con CEFI.
+5. **Manejo de fallos de pago (M‑03, L‑01) y de rebalanceo (M‑04, M‑05):** degradan la contabilidad en escenarios concretos; todos tienen mitigación clara y acotada.
+
+**Sobre “0 riesgos”:** no es alcanzable, y este informe es la prueba. La auditoría anterior a esta revisión concluía «no hay ningún crítico permissionless»; eso era cierto y aun así el crítico existía — porque el vector no era permissionless, sino que atravesaba el límite de confianza que la propia firma del motor definía. Los parches aplicados (`[AUDIT-FIX …]`) son quirúrgicos, compilan y no cambian la semántica de los flujos válidos; el de C‑02 es de 3 líneas y **no requiere cambios off‑chain**.

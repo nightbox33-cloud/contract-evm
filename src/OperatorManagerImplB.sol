@@ -51,6 +51,17 @@ contract OperatorManagerImplB is IOperatorManagerImplB, OwnableUpgradeable, Oper
         }
         
         require(data.data.length >= dataOffset, "Data too short");
+        // [AUDIT-FIX C-02] Calldata/signature mismatch.
+        // The engine signature is computed over `abi.decode(data.data, (T))`
+        // (see Signature.eventsUploadEncodeHash), which HONOURS the leading ABI head offset.
+        // This function instead always strips exactly 32 bytes and re-splices the tail, so the
+        // Ledger re-derives every inner offset from `data.data[32:]`. A payload whose head word is
+        // any value != 0x20 therefore decodes as struct A for the signer and as struct B for the
+        // Ledger, from the very same bytes. Pin the canonical offset so both decoders read the
+        // struct at the same position.
+        if (dataOffset != 0) {
+            require(abi.decode(data.data[:32], (uint256)) == 32, "NonCanonicalDataOffset");
+        }
         bytes memory dataWithoutOffset = abi.encodePacked(data.data[dataOffset:]);
         uint256 eventOffset = 64;   // 0x40 for eventOffset + eventId
         // encode schema for static or dynamic event types
