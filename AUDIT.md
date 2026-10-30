@@ -677,3 +677,52 @@ Riesgos reales, en orden de impacto:
 5. **Manejo de fallos de pago (M‑03, L‑01) y de rebalanceo (M‑04, M‑05):** degradan la contabilidad en escenarios concretos; todos tienen mitigación clara y acotada.
 
 **Sobre “0 riesgos”:** no es alcanzable, y este informe es la prueba. La auditoría anterior a esta revisión concluía «no hay ningún crítico permissionless»; eso era cierto y aun así el crítico existía — porque el vector no era permissionless, sino que atravesaba el límite de confianza que la propia firma del motor definía. Los parches aplicados (`[AUDIT-FIX …]`) son quirúrgicos, compilan y no cambian la semántica de los flujos válidos; el de C‑02 es de 3 líneas y **no requiere cambios off‑chain**.
+
+**Anexo 10** documenta el barrido exhaustivo de control de acceso (187 funciones externas, 40 sin guard, 36 de ellas `view`) y concluye que **no hay ningún crítico permissionless en `src/`**: la superficie permissionless real (`lzReceive`/`receiveMessage` del `VaultCrossChainManager` y del `LedgerCrossChainManager`) **no está en este repositorio**, y el `Vault` paga ciegamente lo que esa capa le pide.
+
+---
+
+## 10. Anexo — Barrido exhaustivo de control de acceso: ¿existe un crítico *permissionless*?
+
+**Pregunta:** ¿hay alguna ruta por la que un tercero **sin ningún rol** (ni `owner`, ni `operator`, ni `crossChainManager`, ni `ledger`, ni rol de `AccessControl`) pueda mover valor o corromper estado?
+
+**Método (ejecutado, no estimado).** Se enumeraron *todas* las funciones `external`/`public` de los 7 contratos de entrada (`Vault`, `VaultManager`, `Ledger`, `OperatorManager`, `OperatorManagerZip`, `FeeManager`, `MarketManager`) y se extrajo el guard de cada una (modificador o `require` en el cuerpo). Se verificó además:
+
+* **No existe `fallback()` ni `receive()` en ningún contrato de `src/`** (`grep -rn "fallback\|receive()" src/` ⇒ 0 resultados). Consecuencia: los contratos "impl" (`OperatorManagerImplA/B`, `LedgerImplA/B/C/D`, `LedgerImplView`) **solo** son alcanzables por `delegatecall` desde su proxy, y toda función del proxy tiene su guard. Los `Impl*` desplegados sueltos escriben en su propio almacenamiento (vacío), tienen `_disableInitializers()` y `ledger`/`vaultManager` en `address(0)` ⇒ inertes.
+* Cada `initialize()` está protegido por `initializer` y los proxies se despliegan con `abi.encodeWithSignature("initialize()")` **en el constructor** (`script/vault/DeployProxyVault.s.sol:26`), es decir, sin ventana de front-running.
+
+**Resultado.**
+
+| Contrato | `external`/`public` | Sin guard | De las cuales `view`/`pure` | Efectivamente invocables por un tercero |
+|---|---|---|---|---|
+| `Vault` | 43 | 11 | 9 | `deposit`, `depositTo` (intencionadas) · `delegateSigner` (solo emite evento) · `attemptTransferNative` (autoguardada: `msg.sender == address(this)`) |
+| `VaultManager` | 34 | 12 | 12 | — |
+| `Ledger` | 60 | 11 | 11 | — |
+| `OperatorManager` | 27 | 2 | 2 | — |
+| `OperatorManagerZip` | 10 | 2 | 0 | `placeholder`, `placeholder2` (cuerpos vacíos) |
+| `FeeManager` | 6 | 1 | 1 | — |
+| `MarketManager` | 7 | 1 | 1 | — |
+| **Total** | **187** | **40** | **36** | **4 (+2 no-ops)** |
+
+Las 4 funciones permissionless con efecto se revisaron línea por línea:
+
+* **`deposit` / `depositTo`** — `checkDepositToken` exige `allowedTokenSet.contains(hash)` **y** `allowedToken[hash] != address(0)` (no basta con un hash inventado: `safeTransferFrom` a una dirección sin código devolvería `true` y permitiría acuñar saldo contra un token inexistente — **está cerrado**); `accountId` se ata a `keccak(receiver, brokerHash)` salvo para `vaultAdapter`; `tokenAmount > 0`; límite de depósito; `safeTransferFrom` antes del mensaje cross-chain. No permite acreditar a una cuenta ajena ni acreditar sin pagar.
+* **`delegateSigner`** — exige `msg.sender.code.length != 0`, `delegateSigner` sin código y `brokerHash` permitido; **solo emite un evento**, no escribe estado.
+* **`attemptTransferNative`** — `require(msg.sender == address(this))`.
+* **`placeholder` / `placeholder2`** — cuerpos vacíos (existen solo para generar el ABI de los structs de `zip`).
+
+**Conclusión.** **No existe un crítico permissionless en `src/`.** Es un resultado negativo *demostrado por enumeración*, no una impresión: la única función permissionless que mueve valor es `deposit`, y su validación es sólida.
+
+**Dónde está, entonces, la superficie permissionless de verdad:** **fuera de este repositorio.** `Vault.withdraw`, `Vault.withdraw2Contract`, `Vault.rebalanceBurn/Mint`, `Vault.setBrokerFromLedger` y `Ledger.accountDeposit` son **ejecutores ciegos** de `crossChainManagerAddress`:
+
+```solidity
+// Vault.sol:483
+function withdraw(VaultTypes.VaultWithdraw calldata data) public onlyCrossChainManager whenNotPaused {
+    IVaultCrossChainManager(crossChainManagerAddress).withdraw(data);   // mensaje saliente
+    uint128 amount = data.tokenAmount - data.fee;
+    tokenAddress.safeTransfer(data.receiver, amount);                   // pago, sin contabilidad propia
+```
+
+El `Vault` paga lo que el CCM le pida (`solo` comprueba `balanceOf(this) >= amount`). Ese CCM (`VaultCrossChainManager` / `LedgerCrossChainManager`, con sus `lzReceive`/`receiveMessage`/`receiveMessageV2`) **no está en `src/`** ni en `config/`: solo hay interfaces (`IVaultCrossChainManager.sol`, `ILedgerCrossChainManager.sol`) y un mock de test. **Si existe un drenaje permissionless en este sistema, está ahí** — en la verificación del `peer`/`srcEid`, la autenticación del endpoint y la anti-repetición de esa capa — y no puede auditarse desde este repositorio.
+
+**Recomendación:** aportar el repositorio/verificación del `VaultCrossChainManager` y del `LedgerCrossChainManager` para auditarlos; son, junto con `OperatorManager`, las tres piezas que sostienen todo el modelo de confianza, y las dos primeras son las únicas con entrada permissionless real.
